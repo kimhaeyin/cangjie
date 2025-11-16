@@ -3,211 +3,225 @@
 #include <string.h>
 #include <ctype.h>
 
-#define MAXTOK 512      // ´Ê·¨µ¥Ôª»º³åÇø×î´ó³¤¶È
-#define MAX_ID_LEN 255  // ±êÊ¶·û×î´ó³¤¶È
-#define MAX_NUM_LEN 255 // Êı×Ö×î´ó³¤¶È
+#define MAXTOK 512
+#define MAX_ID_LEN 255
+#define MAX_NUM_LEN 255
 
-/* ------------------------- ¹Ø¼ü×Ö±í ------------------------- */
+int line = 1;
+int col  = 0;
+
+int getc_track(FILE *fp) {
+    int c = fgetc(fp);
+    if (c == '\n') {
+        line++;
+        col = 0;
+    } else {
+        col++;
+    }
+    return c;
+}
+
+void ungetc_track(int c, FILE *fp) {
+    if (c == EOF) return;
+    ungetc(c, fp);
+    if (c == '\n') {
+        line--;
+        col = 0;
+    } else {
+        col--;
+    }
+}
+
 const char *keywords[] = {
     "int","float","char","if","else","while","for","return",
     "void","main","break","continue","var","let"
 };
 const int n_keywords = sizeof(keywords)/sizeof(keywords[0]);
 
-// ÅĞ¶ÏÊÇ·ñÎª¹Ø¼ü×Ö
 int is_keyword(const char *s) {
     for (int i = 0; i < n_keywords; ++i)
         if (strcmp(s, keywords[i]) == 0) return 1;
     return 0;
 }
 
-/* ------------------------- Êä³öº¯Êı ------------------------- */
-// Êä³ö¹Ø¼ü×Ö
-void out_keyword(const char *s) { printf("%s %s\n", s, s); }
-// Êä³öÔËËã·û
-void out_op(const char *s)      { printf("%s %s\n", s, s); }
-// Êä³ö±êÊ¶·û
-void out_id(const char *s)      { printf("ID %s\n", s); }
-// Êä³öÊı×Ö
-void out_num(const char *s)     { printf("NUM %s\n", s); }
-// Êä³ö´íÎó
-void out_error(const char *s)   { printf("ERROR %s\n", s); }
-// Êä³öÖ¸¶¨´íÎóĞÅÏ¢£¨Èç Identifier_too_long£©
-void out_error_msg(const char *msg) { printf("ERROR %s\n", msg); }
+void out_keyword(const char *s, int ln, int cl) { printf("%-8s %-15s (%3d,%-3d)\n", s, s, ln, cl); }
+void out_op(const char *s, int ln, int cl)      { printf("%-8s %-15s (%3d,%-3d)\n", s, s, ln, cl); }
+void out_id(const char *s, int ln, int cl)      { printf("%-8s %-15s (%3d,%-3d)\n", "ID", s, ln, cl); }
+void out_num(const char *s, int ln, int cl)     { printf("%-8s %-15s (%3d,%-3d)\n", "NUM", s, ln, cl); }
+void out_error(const char *s, int ln, int cl)   { printf("%-8s %-15s (%3d,%-3d)\n", "ERROR", s, ln, cl); }
+void out_error_msg(const char *msg, int ln, int cl) { printf("%-8s %-15s (%3d,%-3d)\n", "ERROR", msg, ln, cl); }
 
-/* ------------------------- ÔËËã·ûÏà¹Ø ------------------------- */
-// ÅĞ¶ÏÊÇ·ñÎªÔËËã·ûÆğÊ¼×Ö·û
 int is_op_start(char c) {
     const char *ops = ":+-*/%=!<>&|^~";
     return strchr(ops, c) != NULL;
 }
 
-// ÅĞ¶ÏÊÇ·ñÎªË«×Ö·ûÔËËã·û
 int match_two_char_op(char a, char b, char *out) {
     const char *two_ops[] = {
         "==","!=","<=",">=","++","--","&&","||",
         "+=","-=","*=","/=","%=","<<",">>"
     };
-    char s[3] = {a, b, 0}; // ¹¹Ôì×Ö·û´®
+    char s[3] = {a, b, 0};
     for (size_t i = 0; i < sizeof(two_ops)/sizeof(two_ops[0]); ++i)
         if (strcmp(s, two_ops[i]) == 0) { strcpy(out, s); return 1; }
     return 0;
 }
 
-/* ------------------------- Ö÷º¯Êı ------------------------- */
 int main(int argc, char *argv[]) {
-    // Ä¬ÈÏÎÄ¼şÂ·¾¶£¬¿ÉÍ¨¹ıÃüÁîĞĞ²ÎÊı´«ÈëÎÄ¼ş
+
     const char *filename = "test.c.txt";
     if (argc >= 2) filename = argv[1];
 
     FILE *fp = fopen(filename, "r");
     if (!fp) {
-        fprintf(stderr, "ÎŞ·¨´ò¿ªÎÄ¼ş£º%s\n", filename);
+        fprintf(stderr, "æ— æ³•æ‰“å¼€æ–‡ä»¶ï¼š%s\n", filename);
         return 1;
     }
 
     int c;
-    while ((c = fgetc(fp)) != EOF) { // Öğ×Ö·û¶ÁÈ¡ÎÄ¼ş
+    while ((c = getc_track(fp)) != EOF) {
 
-        if (isspace(c)) continue; // Ìø¹ı¿Õ°××Ö·û
+        if (isspace(c)) continue;
 
-        /* ------------------------- ×¢ÊÍ´¦Àí ------------------------- */
+        /* ------------------------- æ³¨é‡Š ------------------------- */
         if (c == '/') {
-            int nx = fgetc(fp);
-
+            int nx = getc_track(fp);
             if (nx == '*') {
-                /* ¿é×¢ÊÍ´¦Àí */
+                /* å—æ³¨é‡Š */
                 int prev = 0, closed = 0;
-                //Ò»Ö±É¨Ãèµ½ÎÄ¼şÎ²
-                while ((c = fgetc(fp)) != EOF) {
+                int start_line = line, start_col = col;
+
+                while ((c = getc_track(fp)) != EOF) {
                     if (prev == '*' && c == '/') { closed = 1; break; }
                     prev = c;
                 }
-                //Î´±ÕºÏÊä³ö´íÎóĞÅÏ¢
-                if (!closed) out_error_msg("Unclosed_comment");
+                if (!closed)
+                    out_error_msg("Unclosed_comment", start_line, start_col);
                 continue;
             }
             else if (nx == '/') {
-                /* ĞĞ×¢ÊÍ´¦Àí */
-                while ((c = fgetc(fp)) != EOF && c != '\n');
+                /* è¡Œæ³¨é‡Š */
+                while ((c = getc_track(fp)) != EOF && c != '\n');
                 continue;
             }
             else {
-                /* ²»ÊÇ×¢ÊÍ£¬»Ö¸´¶ÁÈ¡µÄ×Ö·û */
-                if (nx != EOF) ungetc(nx, fp);//½«×Ö·û·Å»ØÊäÈëÁ÷
-                out_op("/"); // Êä³ö³ıºÅ
+                ungetc_track(nx, fp);
+                out_op("/", line, col);
                 continue;
             }
         }
 
-        /* ------------------------- ±êÊ¶·û»ò¹Ø¼ü×Ö ------------------------- */
-        //ÊÇÒ»¸ö×Ö·ûÊı×Ö»òÏÂ»®Ïß
+        /* ------------------------- æ ‡è¯†ç¬¦æˆ–å…³é”®å­— ------------------------- */
         if (isalpha(c) || c == '_') {
-            char buf[MAXTOK];//»º³åÇø£¬´æ´¢±êÊ¶·û
+            char buf[MAXTOK];
             int idx = 0;
-            int too_long = 0;//³¤¶È³¬±ê±êÖ¾
+            int too_long = 0;
+            int start_line = line, start_col = col;
 
             buf[idx++] = (char)c;
 
-            while ((c = fgetc(fp)) != EOF && (isalnum(c) || c == '_')) {
-                if (idx < MAXTOK-1)
-                    buf[idx++] = (char)c;
-                if (idx > MAX_ID_LEN) too_long = 1; // ¼ì²é³¤¶È
+            while ((c = getc_track(fp)) != EOF && (isalnum(c) || c == '_')) {
+                if (idx < MAXTOK-1) buf[idx++] = (char)c;
+                if (idx > MAX_ID_LEN) too_long = 1;
             }
             buf[idx] = '\0';
-            if (c != EOF) ungetc(c, fp);//Óö¿Õ¸ñĞ´»ØÊäÈëÁ÷£¬ºóĞø²ÅÄÜÊ¶±ğÆäËû×Ö·û
+            if (c != EOF) ungetc_track(c, fp);
 
             if (too_long) {
-                out_error_msg("Identifier_too_long");
+                out_error_msg("Identifier_too_long", start_line, start_col);
                 continue;
             }
 
-            if (is_keyword(buf)) out_keyword(buf); // ¹Ø¼ü×ÖÊä³ö
-            else out_id(buf); // ±êÊ¶·ûÊä³ö
-
+            if (is_keyword(buf)) out_keyword(buf, start_line, start_col);
+            else out_id(buf, start_line, start_col);
             continue;
         }
 
-        /* ------------------------- Êı×Ö´¦Àí ------------------------- */
+        /* ------------------------- æ•°å­— ------------------------- */
         if (isdigit(c)) {
-            char buf[MAXTOK]; int idx = 0;
-            int has_dot = 0, illegal = 0, too_long = 0;//has_dog±ê¼ÇÊÇ·ñÒÑ¾­°üº¬Ğ¡Êıµã£¨ÓÃÓÚ¸¡µãÊı£©
+            char buf[MAXTOK];
+            int idx = 0;
+            int has_dot = 0, illegal = 0, too_long = 0;
+            int start_line = line, start_col = col;
 
-            buf[idx++] = (char)c;//½«µÚÒ»¸öÊı×Ö×Ö·û´æÈë»º³åÇø
+            buf[idx++] = (char)c;
 
-            while ((c = fgetc(fp)) != EOF) {
+            while ((c = getc_track(fp)) != EOF) {
                 if (isdigit(c)) {
                     if (idx < MAXTOK-1) buf[idx++] = (char)c;
                 }
-                else if (c == '.' && !has_dot) { // ´¦Àí¸¡µãÊı
+                else if (c == '.' && !has_dot) {
                     has_dot = 1;
-                    if (idx < MAXTOK-1) buf[idx++] = (char)c;
+                    buf[idx++] = (char)c;
                 }
-                else if (isalpha(c) || c == '_') { // Êı×ÖºóÃæ³öÏÖ·Ç·¨×Ö·û
+                else if (isalpha(c) || c == '_') {
                     illegal = 1;
-                    if (idx < MAXTOK-1) buf[idx++] = (char)c;
+                    buf[idx++] = (char)c;
                 }
                 else break;
 
                 if (idx > MAX_NUM_LEN) too_long = 1;
             }
 
-            if (illegal) { // ¼ÌĞø¶ÁÈ¡·Ç·¨×Ö·û
-                while (c != EOF && (isalnum(c) || c == '_')) {
-                    if (idx < MAXTOK-1) buf[idx++] = (char)c;
-                    c = fgetc(fp);
-                }
+            buf[idx] = '\0';
+            if (c != EOF) ungetc_track(c, fp);
+
+            if (too_long) {
+                out_error_msg("Number_too_long", start_line, start_col);
+                continue;
+            }
+            if (illegal) {
+                out_error(buf, start_line, start_col);
+                continue;
             }
 
-            buf[idx] = '\0';
-            if (c != EOF) ungetc(c, fp);
-
-            if (too_long) { out_error_msg("Number_too_long"); continue; }
-            if (illegal) { out_error(buf); continue; }
-
-            out_num(buf); // Êä³öÊı×Ö
+            out_num(buf, start_line, start_col);
             continue;
         }
 
-
-        /* ------------------------- ×Ö·û³£Á¿´¦Àí ------------------------- */
+        /* ------------------------- å­—ç¬¦å¸¸é‡ ------------------------- */
         if (c == '\'') {
             int prev = 0, closed = 0;
-            while ((c = fgetc(fp)) != EOF) {
+            int start_line = line, start_col = col;
+
+            while ((c = getc_track(fp)) != EOF) {
                 if (c == '\'' && prev != '\\') { closed = 1; break; }
-                prev = (c == '\\' ? '\\' : 0);
+                prev = (c == '\\') ? '\\' : 0;
             }
-            if (!closed) out_error_msg("Unclosed_char");
+
+            if (!closed)
+                out_error_msg("Unclosed_char", start_line, start_col);
+
             continue;
         }
 
-        /* ------------------------- ÔËËã·û´¦Àí ------------------------- */
+        /* ------------------------- è¿ç®—ç¬¦ ------------------------- */
         if (is_op_start(c)) {
-            int nx = fgetc(fp);
+            int nx = getc_track(fp);
             char two[4] = {0};
             if (nx != EOF) {
                 if (match_two_char_op((char)c, (char)nx, two)) {
-                    out_op(two); // Êä³öË«×Ö·ûÔËËã·û
+                    out_op(two, line, col - 1);
                     continue;
                 } else {
-                    ungetc(nx, fp); // ²»ÊÇË«×Ö·ûÔËËã·û£¬»Ö¸´×Ö·û
+                    ungetc_track(nx, fp);
                 }
             }
             char s[2] = {(char)c, 0};
-            out_op(s); // Êä³öµ¥×Ö·ûÔËËã·û
+            out_op(s, line, col);
             continue;
         }
 
-        /* ------------------------- ½ç·û´¦Àí ------------------------- */
+        /* ------------------------- ç•Œç¬¦ ------------------------- */
         if (strchr(";,(){}[]", c)) {
             char s[2] = {(char)c, 0};
-            out_op(s);
+            out_op(s, line, col);
             continue;
         }
 
-        /* ------------------------- ÆäËûÈ«²¿ÊÓÎª´íÎó ------------------------- */
+        /* ------------------------- å…¶ä»–éƒ½æ˜¯é”™è¯¯ ------------------------- */
         char tmp[2] = {(char)c, 0};
-        out_error(tmp);
+        out_error(tmp, line, col);
     }
 
     fclose(fp);
