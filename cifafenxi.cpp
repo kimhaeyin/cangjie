@@ -3,144 +3,147 @@
 #include <string.h>
 #include <ctype.h>
 
-#define MAXTOK 512      // è¯æ³•å•å…ƒç¼“å†²åŒºæœ€å¤§é•¿åº¦
-#define MAX_ID_LEN 255  // æ ‡è¯†ç¬¦æœ€å¤§é•¿åº¦
-#define MAX_NUM_LEN 255 // æ•°å­—æœ€å¤§é•¿åº¦
+#define MAXTOK 512      // ´Ê·¨µ¥Ôª»º³åÇø×î´ó³¤¶È
+#define MAX_ID_LEN 255  // ±êÊ¶·û×î´ó³¤¶È
+#define MAX_NUM_LEN 255 // Êı×Ö×î´ó³¤¶È
 
-/* ------------------------- å…³é”®å­—è¡¨ ------------------------- */
+/* ------------------------- ¹Ø¼ü×Ö±í ------------------------- */
 const char *keywords[] = {
     "int","float","char","if","else","while","for","return",
     "void","main","break","continue","var","let"
 };
 const int n_keywords = sizeof(keywords)/sizeof(keywords[0]);
 
-// åˆ¤æ–­æ˜¯å¦ä¸ºå…³é”®å­—
+// ÅĞ¶ÏÊÇ·ñÎª¹Ø¼ü×Ö
 int is_keyword(const char *s) {
     for (int i = 0; i < n_keywords; ++i)
         if (strcmp(s, keywords[i]) == 0) return 1;
     return 0;
 }
 
-/* ------------------------- è¾“å‡ºå‡½æ•° ------------------------- */
-// è¾“å‡ºå…³é”®å­—
+/* ------------------------- Êä³öº¯Êı ------------------------- */
+// Êä³ö¹Ø¼ü×Ö
 void out_keyword(const char *s) { printf("%s %s\n", s, s); }
-// è¾“å‡ºè¿ç®—ç¬¦
+// Êä³öÔËËã·û
 void out_op(const char *s)      { printf("%s %s\n", s, s); }
-// è¾“å‡ºæ ‡è¯†ç¬¦
+// Êä³ö±êÊ¶·û
 void out_id(const char *s)      { printf("ID %s\n", s); }
-// è¾“å‡ºæ•°å­—
+// Êä³öÊı×Ö
 void out_num(const char *s)     { printf("NUM %s\n", s); }
-// è¾“å‡ºé”™è¯¯
+// Êä³ö´íÎó
 void out_error(const char *s)   { printf("ERROR %s\n", s); }
-// è¾“å‡ºæŒ‡å®šé”™è¯¯ä¿¡æ¯ï¼ˆå¦‚ Identifier_too_longï¼‰
+// Êä³öÖ¸¶¨´íÎóĞÅÏ¢£¨Èç Identifier_too_long£©
 void out_error_msg(const char *msg) { printf("ERROR %s\n", msg); }
 
-/* ------------------------- è¿ç®—ç¬¦ç›¸å…³ ------------------------- */
-// åˆ¤æ–­æ˜¯å¦ä¸ºè¿ç®—ç¬¦èµ·å§‹å­—ç¬¦
+/* ------------------------- ÔËËã·ûÏà¹Ø ------------------------- */
+// ÅĞ¶ÏÊÇ·ñÎªÔËËã·ûÆğÊ¼×Ö·û
 int is_op_start(char c) {
     const char *ops = ":+-*/%=!<>&|^~";
     return strchr(ops, c) != NULL;
 }
 
-// åˆ¤æ–­æ˜¯å¦ä¸ºåŒå­—ç¬¦è¿ç®—ç¬¦
+// ÅĞ¶ÏÊÇ·ñÎªË«×Ö·ûÔËËã·û
 int match_two_char_op(char a, char b, char *out) {
     const char *two_ops[] = {
         "==","!=","<=",">=","++","--","&&","||",
         "+=","-=","*=","/=","%=","<<",">>"
     };
-    char s[3] = {a, b, 0}; // æ„é€ å­—ç¬¦ä¸²
+    char s[3] = {a, b, 0}; // ¹¹Ôì×Ö·û´®
     for (size_t i = 0; i < sizeof(two_ops)/sizeof(two_ops[0]); ++i)
         if (strcmp(s, two_ops[i]) == 0) { strcpy(out, s); return 1; }
     return 0;
 }
 
-/* ------------------------- ä¸»å‡½æ•° ------------------------- */
+/* ------------------------- Ö÷º¯Êı ------------------------- */
 int main(int argc, char *argv[]) {
-    // é»˜è®¤æ–‡ä»¶è·¯å¾„ï¼Œå¯é€šè¿‡å‘½ä»¤è¡Œå‚æ•°ä¼ å…¥æ–‡ä»¶
-    const char *filename = "C://Users//21557//Desktop//ç¼–è¯‘åŸç†//project//test.c.txt";
+    // Ä¬ÈÏÎÄ¼şÂ·¾¶£¬¿ÉÍ¨¹ıÃüÁîĞĞ²ÎÊı´«ÈëÎÄ¼ş
+    const char *filename = "test.c.txt";
     if (argc >= 2) filename = argv[1];
 
     FILE *fp = fopen(filename, "r");
     if (!fp) {
-        fprintf(stderr, "æ— æ³•æ‰“å¼€æ–‡ä»¶ï¼š%s\n", filename);
+        fprintf(stderr, "ÎŞ·¨´ò¿ªÎÄ¼ş£º%s\n", filename);
         return 1;
     }
 
     int c;
-    while ((c = fgetc(fp)) != EOF) { // é€å­—ç¬¦è¯»å–æ–‡ä»¶
+    while ((c = fgetc(fp)) != EOF) { // Öğ×Ö·û¶ÁÈ¡ÎÄ¼ş
 
-        if (isspace(c)) continue; // è·³è¿‡ç©ºç™½å­—ç¬¦
+        if (isspace(c)) continue; // Ìø¹ı¿Õ°××Ö·û
 
-        /* ------------------------- æ³¨é‡Šå¤„ç† ------------------------- */
+        /* ------------------------- ×¢ÊÍ´¦Àí ------------------------- */
         if (c == '/') {
             int nx = fgetc(fp);
 
             if (nx == '*') {
-                /* å—æ³¨é‡Šå¤„ç† */
+                /* ¿é×¢ÊÍ´¦Àí */
                 int prev = 0, closed = 0;
+                //Ò»Ö±É¨Ãèµ½ÎÄ¼şÎ²
                 while ((c = fgetc(fp)) != EOF) {
                     if (prev == '*' && c == '/') { closed = 1; break; }
                     prev = c;
                 }
+                //Î´±ÕºÏÊä³ö´íÎóĞÅÏ¢
                 if (!closed) out_error_msg("Unclosed_comment");
                 continue;
             }
             else if (nx == '/') {
-                /* è¡Œæ³¨é‡Šå¤„ç† */
+                /* ĞĞ×¢ÊÍ´¦Àí */
                 while ((c = fgetc(fp)) != EOF && c != '\n');
                 continue;
             }
             else {
-                /* ä¸æ˜¯æ³¨é‡Šï¼Œæ¢å¤è¯»å–çš„å­—ç¬¦ */
-                if (nx != EOF) ungetc(nx, fp);
-                out_op("/"); // è¾“å‡ºé™¤å·
+                /* ²»ÊÇ×¢ÊÍ£¬»Ö¸´¶ÁÈ¡µÄ×Ö·û */
+                if (nx != EOF) ungetc(nx, fp);//½«×Ö·û·Å»ØÊäÈëÁ÷
+                out_op("/"); // Êä³ö³ıºÅ
                 continue;
             }
         }
 
-        /* ------------------------- æ ‡è¯†ç¬¦æˆ–å…³é”®å­— ------------------------- */
+        /* ------------------------- ±êÊ¶·û»ò¹Ø¼ü×Ö ------------------------- */
+        //ÊÇÒ»¸ö×Ö·ûÊı×Ö»òÏÂ»®Ïß
         if (isalpha(c) || c == '_') {
-            char buf[MAXTOK]; 
+            char buf[MAXTOK];//»º³åÇø£¬´æ´¢±êÊ¶·û
             int idx = 0;
-            int too_long = 0;
+            int too_long = 0;//³¤¶È³¬±ê±êÖ¾
 
             buf[idx++] = (char)c;
 
             while ((c = fgetc(fp)) != EOF && (isalnum(c) || c == '_')) {
                 if (idx < MAXTOK-1)
                     buf[idx++] = (char)c;
-                if (idx > MAX_ID_LEN) too_long = 1; // æ£€æŸ¥é•¿åº¦
+                if (idx > MAX_ID_LEN) too_long = 1; // ¼ì²é³¤¶È
             }
             buf[idx] = '\0';
-            if (c != EOF) ungetc(c, fp);
+            if (c != EOF) ungetc(c, fp);//Óö¿Õ¸ñĞ´»ØÊäÈëÁ÷£¬ºóĞø²ÅÄÜÊ¶±ğÆäËû×Ö·û
 
             if (too_long) {
                 out_error_msg("Identifier_too_long");
                 continue;
             }
 
-            if (is_keyword(buf)) out_keyword(buf); // å…³é”®å­—è¾“å‡º
-            else out_id(buf); // æ ‡è¯†ç¬¦è¾“å‡º
+            if (is_keyword(buf)) out_keyword(buf); // ¹Ø¼ü×ÖÊä³ö
+            else out_id(buf); // ±êÊ¶·ûÊä³ö
 
             continue;
         }
 
-        /* ------------------------- æ•°å­—å¤„ç† ------------------------- */
+        /* ------------------------- Êı×Ö´¦Àí ------------------------- */
         if (isdigit(c)) {
             char buf[MAXTOK]; int idx = 0;
-            int has_dot = 0, illegal = 0, too_long = 0;
+            int has_dot = 0, illegal = 0, too_long = 0;//has_dog±ê¼ÇÊÇ·ñÒÑ¾­°üº¬Ğ¡Êıµã£¨ÓÃÓÚ¸¡µãÊı£©
 
-            buf[idx++] = (char)c;
+            buf[idx++] = (char)c;//½«µÚÒ»¸öÊı×Ö×Ö·û´æÈë»º³åÇø
 
             while ((c = fgetc(fp)) != EOF) {
                 if (isdigit(c)) {
                     if (idx < MAXTOK-1) buf[idx++] = (char)c;
                 }
-                else if (c == '.' && !has_dot) { // å¤„ç†æµ®ç‚¹æ•°
+                else if (c == '.' && !has_dot) { // ´¦Àí¸¡µãÊı
                     has_dot = 1;
                     if (idx < MAXTOK-1) buf[idx++] = (char)c;
                 }
-                else if (isalpha(c) || c == '_') { // æ•°å­—åé¢å‡ºç°éæ³•å­—ç¬¦
+                else if (isalpha(c) || c == '_') { // Êı×ÖºóÃæ³öÏÖ·Ç·¨×Ö·û
                     illegal = 1;
                     if (idx < MAXTOK-1) buf[idx++] = (char)c;
                 }
@@ -149,7 +152,7 @@ int main(int argc, char *argv[]) {
                 if (idx > MAX_NUM_LEN) too_long = 1;
             }
 
-            if (illegal) { // ç»§ç»­è¯»å–éæ³•å­—ç¬¦
+            if (illegal) { // ¼ÌĞø¶ÁÈ¡·Ç·¨×Ö·û
                 while (c != EOF && (isalnum(c) || c == '_')) {
                     if (idx < MAXTOK-1) buf[idx++] = (char)c;
                     c = fgetc(fp);
@@ -162,22 +165,12 @@ int main(int argc, char *argv[]) {
             if (too_long) { out_error_msg("Number_too_long"); continue; }
             if (illegal) { out_error(buf); continue; }
 
-            out_num(buf); // è¾“å‡ºæ•°å­—
+            out_num(buf); // Êä³öÊı×Ö
             continue;
         }
 
-        /* ------------------------- å­—ç¬¦ä¸²å¤„ç† ------------------------- */
-        if (c == '"') {
-            int prev = 0, closed = 0;
-            while ((c = fgetc(fp)) != EOF) {
-                if (c == '"' && prev != '\\') { closed = 1; break; }
-                prev = (c == '\\' ? '\\' : 0); // è½¬ä¹‰å­—ç¬¦å¤„ç†
-            }
-            if (!closed) out_error_msg("Unclosed_string");
-            continue;
-        }
 
-        /* ------------------------- å­—ç¬¦å¸¸é‡å¤„ç† ------------------------- */
+        /* ------------------------- ×Ö·û³£Á¿´¦Àí ------------------------- */
         if (c == '\'') {
             int prev = 0, closed = 0;
             while ((c = fgetc(fp)) != EOF) {
@@ -188,31 +181,31 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        /* ------------------------- è¿ç®—ç¬¦å¤„ç† ------------------------- */
+        /* ------------------------- ÔËËã·û´¦Àí ------------------------- */
         if (is_op_start(c)) {
             int nx = fgetc(fp);
             char two[4] = {0};
             if (nx != EOF) {
                 if (match_two_char_op((char)c, (char)nx, two)) {
-                    out_op(two); // è¾“å‡ºåŒå­—ç¬¦è¿ç®—ç¬¦
+                    out_op(two); // Êä³öË«×Ö·ûÔËËã·û
                     continue;
                 } else {
-                    ungetc(nx, fp); // ä¸æ˜¯åŒå­—ç¬¦è¿ç®—ç¬¦ï¼Œæ¢å¤å­—ç¬¦
+                    ungetc(nx, fp); // ²»ÊÇË«×Ö·ûÔËËã·û£¬»Ö¸´×Ö·û
                 }
             }
             char s[2] = {(char)c, 0};
-            out_op(s); // è¾“å‡ºå•å­—ç¬¦è¿ç®—ç¬¦
+            out_op(s); // Êä³öµ¥×Ö·ûÔËËã·û
             continue;
         }
 
-        /* ------------------------- ç•Œç¬¦å¤„ç† ------------------------- */
+        /* ------------------------- ½ç·û´¦Àí ------------------------- */
         if (strchr(";,(){}[]", c)) {
             char s[2] = {(char)c, 0};
             out_op(s);
             continue;
         }
 
-        /* ------------------------- å…¶ä»–å…¨éƒ¨è§†ä¸ºé”™è¯¯ ------------------------- */
+        /* ------------------------- ÆäËûÈ«²¿ÊÓÎª´íÎó ------------------------- */
         char tmp[2] = {(char)c, 0};
         out_error(tmp);
     }
