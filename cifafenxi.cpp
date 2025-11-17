@@ -56,7 +56,7 @@ void out_id(const char *s, int ln, int cl)      { printf("%-8s %-15s (%3d,%-3d)\
 void out_num(const char *s, int ln, int cl)     { printf("%-8s %-15s (%3d,%-3d)\n", "NUM", s, ln, cl); }
 void out_error(const char *s, int ln, int cl)   { printf("%-8s %-15s (%3d,%-3d)\n", "ERROR", s, ln, cl); }
 void out_error_msg(const char *msg, int ln, int cl) { printf("%-8s %-15s (%3d,%-3d)\n", "ERROR", msg, ln, cl); }
-
+void out_char(const char *s, int ln, int cl) { printf("%-8s %-15s (%3d,%-3d)\n", s, s, ln, cl); }
 // 判断是否为运算符起始字符
 int is_op_start(char c) {
     const char *ops = ":+-*/%=!<>&|^~";
@@ -198,7 +198,7 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        /* ========================== 字符常量处理 ========================== */
+        /*/* ========================== 字符常量处理 ========================== #1#
         if (c == '\'') {
             int prev = 0, closed = 0;
             int start_line = line, start_col = col;  // 记录字符常量开始位置
@@ -213,6 +213,31 @@ int main(int argc, char *argv[]) {
             if (!closed)
                 out_error_msg("Unclosed_char", start_line, start_col);
 
+            continue;
+        }*/
+        if (c == '\'') {
+            char char_content[MAXTOK] = "'";
+            int idx = 1;
+            int prev = 0, closed = 0;
+            int start_line = line, start_col = col;
+
+            while ((c = getc_track(fp)) != EOF && idx < MAXTOK - 2) {
+                if (c == '\'' && prev != '\\') {
+                    closed = 1;
+                    char_content[idx++] = '\'';
+                    char_content[idx] = '\0';
+                    break;
+                }
+
+                char_content[idx++] = (char)c;
+                prev = (c == '\\') ? '\\' : 0;
+            }
+
+            if (!closed) {
+                out_error_msg("Unclosed_char", start_line, start_col);
+            } else {
+                out_char(char_content, start_line, start_col);  // 使用专门的输出函数
+            }
             continue;
         }
 
