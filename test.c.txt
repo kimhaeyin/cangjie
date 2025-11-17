@@ -7,7 +7,8 @@ main() {
 
     var num1:int
     num1 = 5
-    let a = 10
+    let c = 'c'
+    let a = 10 '\n'
     let int1 = a + 20
 
     if (a >= 10) {
@@ -20,12 +21,13 @@ main() {
 
     1abc = 5          // 非法标识符：数字开头
     b4d = b4d + 1     // 合法：ID b4d
-    while1 = 5        // 合法：ID while1 (不能识别成关键字 while)
-    if_2 = 0          // 合法：ID if_2
+    while1 = 5.1        // 合法：ID while1 (不能识别成关键字 while)
+    if_2 = 0.3       // 合法：ID if_2
 
     xx == yy          // 双字符运算符
     ++a               // 自增
     a--               // 自减
+
 /*
     return a
 
