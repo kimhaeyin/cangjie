@@ -1,0 +1,11 @@
+ID main
+( (
+) )
+{ {
+var var
+ID i
+: :
+int int
+; ;
+} }
+
