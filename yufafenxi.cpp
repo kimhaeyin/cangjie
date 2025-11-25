@@ -1,933 +1,1829 @@
-/* ASTparse.c
-   基于你提供的 TESTparse 框架改造，生成抽象语法树（AST）并以 JSON 输出。
-   假设输入文件为词法器输出，每行两个字段：token token1
-   例如:
-     ID main
-     ( (
-     ) )
-     { {
-     var var
-     ID n
-     : :
-     int int
-     ...
-*/
-
+//TESTparse 语法分析
 #include <stdio.h>
+#include <ctype.h>
+#include <conio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 
-#define TOKLEN 64
-#define LEXLEN 256
-#define MAX_CHILDREN 32
+// 语法树节点结构
+typedef struct TreeNode {
+    char nodeType[20];      // 节点类型
+    char tokenValue[40];    // 单词值
+    int line;               // 行号（可选）
+    struct TreeNode *firstChild;  // 第一个子节点
+    struct TreeNode *nextSibling; // 下一个兄弟节点
+} TreeNode;
 
-/* ---------- token stream (与老师原框架保持兼容) ---------- */
-char token[TOKLEN], token1[LEXLEN];
-FILE *fpTokenin;
+// 全局变量
+char token[20], token1[40]; // 单词类别值、单词自身值
+char tokenfile[30];         // 单词流文件的名字
+FILE *fpTokenin;            // 单词流文件指针
 
-/* 读取下一个 token；返回 0=正常，EOF=1 */
-int next_token() {
-    if (fscanf(fpTokenin, "%s %s", token, token1) == 2) {
-        return 0;
+TreeNode *root = NULL;      // 语法树根节点
+int currentLine = 1;        // 当前行号
+
+// 函数声明
+int TESTparse();
+TreeNode* createNode(char *nodeType, char *tokenValue);
+void addChild(TreeNode *parent, TreeNode *child);
+void printTree(TreeNode *node, int level);
+int program(TreeNode **node);
+int fun_declaration(TreeNode *parent);
+int main_declaration(TreeNode *parent);
+int function_body(TreeNode *parent);
+int compound_stat(TreeNode *parent);
+int statement(TreeNode *parent);
+int expression_stat(TreeNode *parent);
+int expression(TreeNode *parent);
+int bool_expr(TreeNode *parent);
+int additive_expr(TreeNode *parent);
+int term(TreeNode *parent);
+int factor(TreeNode *parent);
+int if_stat(TreeNode *parent);
+int while_stat(TreeNode *parent);
+int for_stat(TreeNode *parent);
+int write_stat(TreeNode *parent);
+int read_stat(TreeNode *parent);
+int declaration_stat(TreeNode *parent);
+int declaration_list(TreeNode *parent);
+int statement_list(TreeNode *parent);
+int call_stat(TreeNode *parent);
+
+// 创建语法树节点
+TreeNode* createNode(char *nodeType, char *tokenValue) {
+    TreeNode *node = (TreeNode*)malloc(sizeof(TreeNode));
+    strcpy(node->nodeType, nodeType);
+    if (tokenValue) {
+        strcpy(node->tokenValue, tokenValue);
     } else {
-        strcpy(token, "EOF");
-        token1[0] = '\0';
-        return 1;
+        strcpy(node->tokenValue, "");
     }
+    node->line = currentLine;
+    node->firstChild = NULL;
+    node->nextSibling = NULL;
+    return node;
 }
 
-/* ---------- AST 节点定义 ---------- */
-typedef enum {
-    AST_Program,
-    AST_FunctionDecl,
-    AST_MainDecl,
-    AST_Block,            // function body => block
-    AST_VarDecl,          // VariableDeclaration
-    AST_VarDeclarator,
-    AST_Identifier,
-    AST_BasicLit,         // numeric literal
-    AST_Assign,
-    AST_BinaryExpr,
-    AST_Read,
-    AST_Write,
-    AST_If,
-    AST_While,
-    AST_For,
-    AST_Call,
-    AST_ExpressionStmt,
-    AST_Empty
-} ASTKind;
+// 添加子节点
+void addChild(TreeNode *parent, TreeNode *child) {
+    if (parent == NULL || child == NULL) return;
 
-typedef struct ASTNode {
-    ASTKind kind;
-    char type_name[64];    // optional textual type (e.g., "var"/"int", binary op)
-    char lexeme[LEXLEN];   // for identifier names or literal raw
-    struct ASTNode *children[MAX_CHILDREN];
-    int child_count;
-} ASTNode;
-
-ASTNode* new_node(ASTKind k) {
-    ASTNode *n = (ASTNode*)malloc(sizeof(ASTNode));
-    memset(n, 0, sizeof(ASTNode));
-    n->kind = k;
-    n->child_count = 0;
-    n->type_name[0] = '\0';
-    n->lexeme[0] = '\0';
-    return n;
-}
-void add_child(ASTNode *p, ASTNode *c) {
-    if (!p || !c) return;
-    if (p->child_count < MAX_CHILDREN) p->children[p->child_count++] = c;
-    else fprintf(stderr, "warning: too many children\n");
-}
-
-/* helpers to create specific nodes */
-ASTNode* new_identifier(const char *name) {
-    ASTNode *n = new_node(AST_Identifier);
-    strncpy(n->lexeme, name, sizeof(n->lexeme)-1);
-    return n;
-}
-ASTNode* new_basiclit(const char *raw) {
-    ASTNode *n = new_node(AST_BasicLit);
-    strncpy(n->lexeme, raw, sizeof(n->lexeme)-1);
-    return n;
-}
-ASTNode* new_vardeclarator(ASTNode *id, ASTNode *init) {
-    ASTNode *n = new_node(AST_VarDeclarator);
-    if (id) add_child(n, id);
-    if (init) add_child(n, init);
-    return n;
-}
-ASTNode* new_vardecl(const char *kind) {
-    ASTNode *n = new_node(AST_VarDecl);
-    if (kind) strncpy(n->type_name, kind, sizeof(n->type_name)-1);
-    return n;
-}
-ASTNode* new_function_decl(const char *fname) {
-    ASTNode *n = new_node(AST_FunctionDecl);
-    if (fname) strncpy(n->type_name, fname, sizeof(n->type_name)-1);
-    return n;
-}
-ASTNode* new_main_decl() {
-    return new_node(AST_MainDecl);
-}
-ASTNode* new_block() { return new_node(AST_Block); }
-ASTNode* new_assign(ASTNode *left, ASTNode *right) {
-    ASTNode *n = new_node(AST_Assign);
-    add_child(n, left);
-    add_child(n, right);
-    return n;
-}
-ASTNode* new_binary(const char *op, ASTNode *l, ASTNode *r) {
-    ASTNode *n = new_node(AST_BinaryExpr);
-    strncpy(n->type_name, op, sizeof(n->type_name)-1);
-    if (l) add_child(n, l);
-    if (r) add_child(n, r);
-    return n;
-}
-ASTNode* new_read(ASTNode *id) {
-    ASTNode *n = new_node(AST_Read);
-    if (id) add_child(n, id);
-    return n;
-}
-ASTNode* new_write(ASTNode *expr) {
-    ASTNode *n = new_node(AST_Write);
-    if (expr) add_child(n, expr);
-    return n;
-}
-ASTNode* new_if(ASTNode *cond, ASTNode *thenb, ASTNode *elseb) {
-    ASTNode *n = new_node(AST_If);
-    if (cond) add_child(n, cond);
-    if (thenb) add_child(n, thenb);
-    if (elseb) add_child(n, elseb);
-    return n;
-}
-ASTNode* new_while(ASTNode *cond, ASTNode *body) {
-    ASTNode *n = new_node(AST_While);
-    if (cond) add_child(n, cond);
-    if (body) add_child(n, body);
-    return n;
-}
-ASTNode* new_for(ASTNode *id, ASTNode *rangeExpr, ASTNode *body) {
-    ASTNode *n = new_node(AST_For);
-    if (id) add_child(n, id);
-    if (rangeExpr) add_child(n, rangeExpr);
-    if (body) add_child(n, body);
-    return n;
-}
-ASTNode* new_call(const char *fname) {
-    ASTNode *n = new_node(AST_Call);
-    if (fname) strncpy(n->type_name, fname, sizeof(n->type_name)-1);
-    return n;
-}
-ASTNode* new_exprstmt(ASTNode *expr) {
-    ASTNode *n = new_node(AST_ExpressionStmt);
-    if (expr) add_child(n, expr);
-    return n;
-}
-
-/* ---------- JSON 打印 ---------- */
-void json_escape_print(const char *s) {
-    putchar('"');
-    for (const char *p = s; p && *p; ++p) {
-        if (*p == '\\' || *p == '"') {
-            putchar('\\'); putchar(*p);
-        } else if (*p == '\n') {
-            printf("\\n");
-        } else {
-            putchar(*p);
+    if (parent->firstChild == NULL) {
+        parent->firstChild = child;
+    } else {
+        TreeNode *temp = parent->firstChild;
+        while (temp->nextSibling != NULL) {
+            temp = temp->nextSibling;
         }
-    }
-    putchar('"');
-}
-
-void print_indent(int indent) {
-    for (int i = 0; i < indent; ++i) putchar(' ');
-}
-
-const char* kind_name(ASTKind k) {
-    switch(k) {
-        case AST_Program: return "Program";
-        case AST_FunctionDecl: return "FunctionDeclaration";
-        case AST_MainDecl: return "MainDeclaration";
-        case AST_Block: return "Block";
-        case AST_VarDecl: return "VariableDeclaration";
-        case AST_VarDeclarator: return "VariableDeclarator";
-        case AST_Identifier: return "Identifier";
-        case AST_BasicLit: return "BasicLit";
-        case AST_Assign: return "AssignExpression";
-        case AST_BinaryExpr: return "BinaryExpression";
-        case AST_Read: return "ReadStatement";
-        case AST_Write: return "WriteStatement";
-        case AST_If: return "IfStatement";
-        case AST_While: return "WhileStatement";
-        case AST_For: return "ForStatement";
-        case AST_Call: return "CallExpression";
-        case AST_ExpressionStmt: return "ExpressionStatement";
-        case AST_Empty: return "Empty";
-        default: return "Unknown";
+        temp->nextSibling = child;
     }
 }
 
-/* 递归打印 AST 为 JSON 格式，indent 为当前缩进空格数 */
-void print_json(ASTNode *n, int indent) {
-    if (!n) { printf("null"); return; }
+// 打印语法树
+void printTree(TreeNode *node, int level) {
+    if (node == NULL) return;
 
-    print_indent(indent); printf("{\n");
-    print_indent(indent+2); printf("\"type\": "); json_escape_print(kind_name(n->kind)); printf(",\n");
-
-    /* 节点特有字段 */
-    switch(n->kind) {
-        case AST_VarDecl:
-            print_indent(indent+2); printf("\"kind\": ");
-            json_escape_print(n->type_name[0] ? n->type_name : "var"); printf(",\n");
-            print_indent(indent+2); printf("\"declarations\": [\n");
-            for (int i=0;i<n->child_count;i++){
-                print_json(n->children[i], indent+4);
-                if (i+1 < n->child_count) printf(",\n"); else printf("\n");
-            }
-            print_indent(indent+2); printf("]\n");
-            break;
-
-        case AST_VarDeclarator:
-            /* child[0] = id, child[1] = init? */
-            print_indent(indent+2); printf("\"type\": "); json_escape_print("VariableDeclarator"); printf(",\n");
-            if (n->child_count > 0) {
-                print_indent(indent+2); printf("\"id\": \n");
-                print_json(n->children[0], indent+4); printf(",\n");
-            }
-            if (n->child_count > 1) {
-                print_indent(indent+2); printf("\"init\": \n");
-                print_json(n->children[1], indent+4); printf("\n");
-            } else {
-                /* no init */
-                print_indent(indent+2); printf("\"init\": null\n");
-            }
-            break;
-
-        case AST_Identifier:
-            print_indent(indent+2); printf("\"type\": "); json_escape_print("Identifier"); printf(",\n");
-            print_indent(indent+2); printf("\"name\": ");
-            json_escape_print(n->lexeme); printf("\n");
-            break;
-
-        case AST_BasicLit:
-            print_indent(indent+2); printf("\"type\": "); json_escape_print("BasicLit"); printf(",\n");
-            /* 默认当作 INT */
-            print_indent(indent+2); printf("\"kind\": ");
-            json_escape_print("INT"); printf(",\n");
-            print_indent(indent+2); printf("\"value\": ");
-            json_escape_print(n->lexeme); printf(",\n");
-            print_indent(indent+2); printf("\"raw\": ");
-            json_escape_print(n->lexeme); printf("\n");
-            break;
-
-        case AST_FunctionDecl:
-            print_indent(indent+2); printf("\"name\": ");
-            json_escape_print(n->type_name); printf(",\n");
-            print_indent(indent+2); printf("\"body\": \n");
-            if (n->child_count>0) print_json(n->children[0], indent+4); else { print_indent(indent+4); printf("null\n"); }
-            break;
-
-        case AST_MainDecl:
-            print_indent(indent+2); printf("\"body\": \n");
-            if (n->child_count>0) print_json(n->children[0], indent+4); else { print_indent(indent+4); printf("null\n"); }
-            break;
-
-        case AST_Block:
-            print_indent(indent+2); printf("\"statements\": [\n");
-            for (int i=0;i<n->child_count;i++){
-                print_json(n->children[i], indent+4);
-                if (i+1 < n->child_count) printf(",\n"); else printf("\n");
-            }
-            print_indent(indent+2); printf("]\n");
-            break;
-
-        case AST_Assign:
-            print_indent(indent+2); printf("\"left\": \n");
-            print_json(n->children[0], indent+4); printf(",\n");
-            print_indent(indent+2); printf("\"right\": \n");
-            print_json(n->children[1], indent+4); printf("\n");
-            break;
-
-        case AST_BinaryExpr:
-            print_indent(indent+2); printf("\"operator\": ");
-            json_escape_print(n->type_name); printf(",\n");
-            print_indent(indent+2); printf("\"left\": \n");
-            print_json(n->children[0], indent+4); printf(",\n");
-            print_indent(indent+2); printf("\"right\": \n");
-            print_json(n->children[1], indent+4); printf("\n");
-            break;
-
-        case AST_Read:
-            print_indent(indent+2); printf("\"id\": \n");
-            print_json(n->children[0], indent+4); printf("\n");
-            break;
-
-        case AST_Write:
-            print_indent(indent+2); printf("\"expr\": \n");
-            print_json(n->children[0], indent+4); printf("\n");
-            break;
-
-        case AST_If:
-            print_indent(indent+2); printf("\"cond\": \n");
-            print_json(n->children[0], indent+4); printf(",\n");
-            print_indent(indent+2); printf("\"then\": \n");
-            print_json(n->children[1], indent+4);
-            if (n->child_count > 2) { printf(",\n"); print_indent(indent+2); printf("\"else\": \n"); print_json(n->children[2], indent+4); printf("\n"); }
-            else printf("\n");
-            break;
-
-        case AST_While:
-            print_indent(indent+2); printf("\"cond\": \n");
-            print_json(n->children[0], indent+4); printf(",\n");
-            print_indent(indent+2); printf("\"body\": \n");
-            print_json(n->children[1], indent+4); printf("\n");
-            break;
-
-        case AST_For:
-            print_indent(indent+2); printf("\"id\": \n");
-            print_json(n->children[0], indent+4); printf(",\n");
-            print_indent(indent+2); printf("\"range\": \n");
-            print_json(n->children[1], indent+4); printf(",\n");
-            print_indent(indent+2); printf("\"body\": \n");
-            print_json(n->children[2], indent+4); printf("\n");
-            break;
-
-        case AST_Call:
-            print_indent(indent+2); printf("\"callee\": ");
-            json_escape_print(n->type_name); printf("\n");
-            break;
-
-        case AST_ExpressionStmt:
-            print_indent(indent+2); printf("\"expression\": \n");
-            print_json(n->children[0], indent+4); printf("\n");
-            break;
-
-        case AST_Program:
-            print_indent(indent+2); printf("\"body\": [\n");
-            for (int i=0;i<n->child_count;i++){
-                print_json(n->children[i], indent+4);
-                if (i+1 < n->child_count) printf(",\n"); else printf("\n");
-            }
-            print_indent(indent+2); printf("]\n");
-            break;
-
-        default:
-            /* generic fallback: print children array */
-            print_indent(indent+2); printf("\"children\": [\n");
-            for (int i=0;i<n->child_count;i++){
-                print_json(n->children[i], indent+4);
-                if (i+1 < n->child_count) printf(",\n"); else printf("\n");
-            }
-            print_indent(indent+2); printf("]\n");
-            break;
+    for (int i = 0; i < level; i++) {
+        printf("  ");
     }
-
-    print_indent(indent); printf("}");
-}
-
-/* ---------- 解析函数原型（返回 ASTNode*） ---------- */
-ASTNode* parse_program();
-ASTNode* parse_fun_declaration();
-ASTNode* parse_main_declaration();
-ASTNode* parse_function_body();
-ASTNode* parse_declaration_list();
-ASTNode* parse_declaration_stat();
-ASTNode* parse_statement_list();
-ASTNode* parse_statement();
-ASTNode* parse_compound_stat();
-ASTNode* parse_expression_stat();
-ASTNode* parse_expression();
-ASTNode* parse_bool_expr();
-ASTNode* parse_additive_expr();
-ASTNode* parse_term();
-ASTNode* parse_factor();
-ASTNode* parse_if_stat();
-ASTNode* parse_while_stat();
-ASTNode* parse_for_stat();
-ASTNode* parse_write_stat();
-ASTNode* parse_read_stat();
-ASTNode* parse_call_stat();
-
-/* ---------- 错误处理（简化：打印信息并 exit） ---------- */
-void error_line(const char *msg) {
-    /* 词法流中没有行号，所以直接打印 msg（保持老师风格） */
-    printf("%s\n", msg);
-    exit(1);
-}
-void error_fmt(const char *fmt, const char *arg) {
-    if (arg) {
-        char buf[512];
-        snprintf(buf, sizeof(buf), fmt, arg);
-        error_line(buf);
-    } else error_line(fmt);
-}
-
-/* ---------- 解析实现（基于 PDF 与你的框架语法） ---------- */
-
-/* <program> -> { fun_declaration } main_declaration */
-ASTNode* parse_program() {
-    ASTNode *prog = new_node(AST_Program);
-    /* read first token before loop */
-    if (next_token() != 0) {
-        error_line("输入为空或文件格式错误。");
+    printf("%s", node->nodeType);
+    if (strlen(node->tokenValue) > 0) {
+        printf(": %s", node->tokenValue);
     }
-
-    /* parse zero or more function declarations starting with "function" or "func" */
-    while (strcmp(token, "function") == 0 || strcmp(token, "func") == 0) {
-        /* read next token which should be ID */
-        if (next_token() != 0) error_line("函数定义缺少标识符。");
-        ASTNode *f = parse_fun_declaration();
-        if (!f) return NULL;
-        add_child(prog, f);
-        /* token already advanced by fun_declaration to next */
-    }
-
-    /* now expect main function: original framework sometimes had token == "ID" and token1 == "main" */
-    if (strcmp(token, "ID") == 0 && strcmp(token1, "main") == 0) {
-        if (next_token() != 0) error_line("main 后缺少 ( 。");
-        ASTNode *m = parse_main_declaration();
-        if (!m) return NULL;
-        add_child(prog, m);
-    } else if (strcmp(token, "main") == 0) {
-        /* some token streams might give keyword directly */
-        if (next_token() != 0) error_line("main 后缺少 ( 。");
-        ASTNode *m = parse_main_declaration();
-        if (!m) return NULL;
-        add_child(prog, m);
-    } else {
-        error_line("第1行：缺少 main 函数或 main 名称错误。");
-    }
-
-    return prog;
-}
-
-/* <fun_declaration> -> function ID '(' ')' function_body
-   note: token currently points to token after function/func (we called next_token already)
-*/
-ASTNode* parse_fun_declaration() {
-    /* current token should be ID with function name */
-    if (strcmp(token, "ID") != 0) {
-        error_line("函数定义缺少标识符。");
-    }
-    ASTNode *fname = new_identifier(token1);
-    /* advance */
-    if (next_token() != 0) error_line("函数定义缺少 '(' 。");
-
-    if (strcmp(token, "(") != 0 && strcmp(token, "LP") != 0) {
-        error_line("缺少'('。");
-    }
-    if (next_token() != 0) error_line("函数缺少 ')'");
-    if (strcmp(token, ")") != 0 && strcmp(token, "RP") != 0) {
-        error_line("缺少')'。");
-    }
-    /* advance to next token (start of function body) */
-    if (next_token() != 0) error_line("函数缺少函数体。");
-
-    ASTNode *fnode = new_function_decl(fname->lexeme);
-    ASTNode *body = parse_function_body();
-    add_child(fnode, body);
-    /* after parse_function_body, token points to next token after '}' */
-    return fnode;
-}
-
-/* <main_declaration> -> main '(' ')' function_body */
-ASTNode* parse_main_declaration() {
-    /* token currently at token after '(' ) reading managed by caller: we called next_token prior */
-    if (strcmp(token, "(") != 0 && strcmp(token, "LP") != 0) {
-        error_line("缺少'('。");
-    }
-    if (next_token() != 0) error_line("main 函数缺少 ')'");
-    if (strcmp(token, ")") != 0 && strcmp(token, "RP") != 0) {
-        error_line("缺少')'。");
-    }
-    if (next_token() != 0) error_line("main 函数缺少函数体。");
-    ASTNode *m = new_main_decl();
-    ASTNode *body = parse_function_body();
-    add_child(m, body);
-    return m;
-}
-
-/* <function_body> -> '{' declaration_list statement_list '}' */
-ASTNode* parse_function_body() {
-    if (!(strcmp(token, "{") == 0 || strcmp(token, "LC") == 0)) {
-        error_line("函数体缺少 '{'。");
-    }
-    /* advance into body */
-    if (next_token() != 0) error_line("函数体格式错误。");
-    ASTNode *block = new_block();
-
-    ASTNode *decls = parse_declaration_list();
-    if (decls) {
-        /* declaration_list returns a block of var decls as children */
-        for (int i=0;i<decls->child_count;i++) add_child(block, decls->children[i]);
-        free(decls); // temporary container
-    }
-
-    ASTNode *stmts = parse_statement_list();
-    if (stmts) {
-        for (int i=0;i<stmts->child_count;i++) add_child(block, stmts->children[i]);
-        free(stmts);
-    }
-
-    /* current token should be '}' */
-    if (!(strcmp(token, "}") == 0 || strcmp(token, "RC") == 0)) {
-        error_line("函数体缺少 '}'。");
-    }
-    /* advance after '}' */
-    next_token();
-    return block;
-}
-
-/* <declaration_list> -> { declaration_stat } */
-ASTNode* parse_declaration_list() {
-    ASTNode *container = new_node(AST_Empty);
-    while (strcmp(token, "var") == 0 || strcmp(token, "VAR") == 0) {
-        ASTNode *d = parse_declaration_stat();
-        if (d) add_child(container, d);
-        /* token advanced by declaration_stat */
-    }
-    return container;
-}
-
-/* <declaration_stat> -> var ID : int  (or var ID : type) */
-ASTNode* parse_declaration_stat() {
-    /* token == "var" */
-    if (!(strcmp(token, "var") == 0 || strcmp(token, "VAR") == 0)) {
-        error_line("declaration_stat 预期 var。");
-    }
-    /* read next token -> should be ID */
-    if (next_token() != 0) error_line("var 后缺少标识符。");
-    if (strcmp(token, "ID") != 0) {
-        error_line("第1行：缺少标识符。");
-    }
-    ASTNode *id = new_identifier(token1);
-    if (next_token() != 0) error_line("var 声明格式错误，缺少 ':' 或类型。");
-    if (!(strcmp(token, ":") == 0 || strcmp(token, "COLON") == 0)) {
-        error_line("var 声明缺少 ':'。");
-    }
-    if (next_token() != 0) error_line("var 声明缺少类型。");
-    /* assume type token is 'int' or 'TYPE' */
-    char vtype[64] = "int";
-    if (strcmp(token, "int") == 0 || strcmp(token, "TYPE") == 0 || strcmp(token, "INTTYPE") == 0) {
-        strncpy(vtype, token1, sizeof(vtype)-1);
-    } else {
-        /* Accept token1 as type if provided */
-        strncpy(vtype, token1, sizeof(vtype)-1);
-    }
-    /* optionally there can be '= NUM' initialization or a semicolon */
-    /* peek next */
-    if (next_token() != 0) error_line("var 声明缺少结尾。");
-    ASTNode *init = NULL;
-    if (strcmp(token, "=") == 0) {
-        if (next_token() != 0) error_line("var 初始化缺少表达式值。");
-        if (strcmp(token, "NUM") == 0 || strcmp(token, "INT") == 0) {
-            init = new_basiclit(token1);
-            if (next_token() != 0) error_line("var 初始化缺少分号。");
-            if (strcmp(token, ";") != 0 && strcmp(token, "SEMI") != 0) error_line("缺少分号。");
-        } else {
-            error_line("var 初始化目前只支持整数字面量。");
-        }
-    } else {
-        /* token should be ; */
-        if (strcmp(token, ";") != 0 && strcmp(token, "SEMI") != 0) {
-            error_line("缺少分号。");
-        }
-    }
-    /* construct nodes */
-    ASTNode *vdecl = new_vardecl("var");
-    ASTNode *vdtor = new_vardeclarator(id, init);
-    add_child(vdecl, vdtor);
-    /* advance after semicolon: after we got ';' token, move next */
-    next_token();
-    return vdecl;
-}
-
-/* <statement_list> -> { statement } until '}' */
-ASTNode* parse_statement_list() {
-    ASTNode *container = new_node(AST_Empty);
-    while (!(strcmp(token, "}") == 0 || strcmp(token, "RC") == 0 || strcmp(token, "EOF") == 0)) {
-        ASTNode *s = parse_statement();
-        if (s) add_child(container, s);
-    }
-    return container;
-}
-
-/* <statement> -> if | while | for | read | write | compound | call | expression_stat */
-ASTNode* parse_statement() {
-    if (strcmp(token, "if") == 0) return parse_if_stat();
-    if (strcmp(token, "while") == 0) return parse_while_stat();
-    if (strcmp(token, "for") == 0) return parse_for_stat();
-    if (strcmp(token, "read") == 0) return parse_read_stat();
-    if (strcmp(token, "write") == 0) return parse_write_stat();
-    if (strcmp(token, "{") == 0 || strcmp(token, "LC") == 0) return parse_compound_stat();
-    if (strcmp(token, "call") == 0) return parse_call_stat();
-    /* expression or empty ; */
-    return parse_expression_stat();
-}
-
-/* compound: '{' statement_list '}' */
-ASTNode* parse_compound_stat() {
-    if (!(strcmp(token, "{") == 0 || strcmp(token, "LC") == 0)) {
-        error_line("复合语句应以 '{' 开始。");
-    }
-    /* advance into block */
-    if (next_token() != 0) error_line("复合语句格式错误。");
-    ASTNode *block = new_block();
-    ASTNode *stmts = parse_statement_list();
-    if (stmts) {
-        for (int i=0;i<stmts->child_count;i++) add_child(block, stmts->children[i]);
-        free(stmts);
-    }
-    if (!(strcmp(token, "}") == 0 || strcmp(token, "RC") == 0)) error_line("缺少 '}'。");
-    next_token(); /* consume '}' */
-    return block;
-}
-
-/* expression_stat -> expression ';' | ';' */
-ASTNode* parse_expression_stat() {
-    if (strcmp(token, ";") == 0 || strcmp(token, "SEMI") == 0) {
-        next_token();
-        return new_node(AST_Empty);
-    }
-    ASTNode *expr = parse_expression();
-    if (!expr) error_line("表达式解析失败。");
-    if (!(strcmp(token, ";") == 0 || strcmp(token, "SEMI") == 0)) error_line("缺少分号。");
-    next_token();
-    return new_exprstmt(expr);
-}
-
-/* expression -> ID = bool_expr | bool_expr */
-ASTNode* parse_expression() {
-    /* if token == ID and next token is '=' -> assignment */
-    if (strcmp(token, "ID") == 0) {
-        /* peek next token by reading then potentially rolling back is complex with file-based stream;
-           but original framework uses sequential reads; to emulate peek we can read next_token into temporaries
-           and use a small buffer file pointer trick: here simpler approach: we rely on token stream tokens where '=' is token itself.
-           So current token == "ID", and token1 contains lexeme. We'll read next token and check if it's '='.
-        */
-        char savedTok[TOKLEN], savedLex[LEXLEN];
-        strncpy(savedTok, token, sizeof(savedTok));
-        strncpy(savedLex, token1, sizeof(savedLex));
-        if (next_token() != 0) {
-            error_line("表达式后出现 EOF。");
-        }
-        if (strcmp(token, "=") == 0) {
-            /* assignment: left = ID(savedLex) ; parse rhs */
-            ASTNode *left = new_identifier(savedLex);
-            if (next_token() != 0) error_line("赋值缺少右侧表达式。");
-            ASTNode *right = parse_bool_expr();
-            if (!right) error_line("赋值右侧表达式解析失败。");
-            return new_assign(left, right);
-        } else {
-            /* not an assignment, treat saved ID as start of bool_expr: we need to rebuild stream state:
-               we have already consumed an extra token (current token holds the token after the ID),
-               but parse_bool_expr expects current token to be that token (so it's fine). We need to create a node for ID
-               and pass control to parse_bool_expr with that weaved in. Simpler: create an Identifier node for savedLex,
-               then treat grammar as starting from that token: We'll create an initial factor that returns that ID, and
-               then let bool_expr continue parsing using current token (which is already the next token).
-            */
-            /* create an AST node representing the identifier literal for leftmost factor, and then call parse_additive_expr
-               but our parse_bool_expr expects to start parsing an additive_expr possibly starting from current token.
-               To integrate smoothly, we'll implement parse_bool_expr and lower-level functions to accept that current token may already
-               be set to the subsequent token; since saved ID must be used as the first part of expression, we construct an AST representing that.
-               Easiest workaround: create a Binary expression if next tokens indicate operator, else return the ID as BasicExpr.
-            */
-            /* Check if current token is relational operator, arithmetic operator, etc. We'll treat simple case: if current token is operator
-               handled by additive_expr ( + - * / ( ) NUM ID ), then we'll synthesize an AST where left is Identifier(savedLex) and let additive/term/factor
-               code use current token for the rest.
-            */
-            ASTNode *leftNode = new_identifier(savedLex);
-            /* Now current token points to token after ID; call parse_bool_expr but provide leftNode as starting left.
-               To avoid refactoring many functions, a practical approach: we manually handle simple cases: if current token is one of + - * / > < etc,
-               call parse_additive_expr_by_left(leftNode), else if it's ';' or ')' or '}' or ',' or EOF, just return leftNode.
-            */
-            /* If token is operator that begins additive_expr */
-            if (strcmp(token, "+")==0 || strcmp(token, "-")==0 || strcmp(token, "*")==0 || strcmp(token, "/")==0
-                || strcmp(token, ">")==0 || strcmp(token, "<")==0 || strcmp(token, ">=")==0 || strcmp(token, "<=")==0
-                || strcmp(token, "==")==0 || strcmp(token, "!=")==0) {
-                /* we will call parse_additive_expr by creating a small wrapper: put leftNode into parsing pipeline */
-
-                /* implement a simple loop: parse multiplicative and additive using leftNode as left */
-                /* For simplicity implement single-level: while token is + or -, consume operator and parse term to build binary tree */
-                ASTNode *curLeft = leftNode;
-                while (strcmp(token, "+")==0 || strcmp(token, "-")==0 || strcmp(token, "*")==0 || strcmp(token, "/")==0) {
-                    char opbuf[8];
-                    strncpy(opbuf, token, sizeof(opbuf)-1);
-                    if (next_token() != 0) error_line("运算符后缺少操作数。");
-                    ASTNode *right = NULL;
-                    /* right could be ID or NUM or '(' */
-                    if (strcmp(token, "NUM")==0 || strcmp(token, "INT")==0) {
-                        right = new_basiclit(token1);
-                        next_token();
-                    } else if (strcmp(token, "ID")==0) {
-                        right = new_identifier(token1);
-                        next_token();
-                    } else if (strcmp(token, "(")==0) {
-                        /* parse parenthesized expression */
-                        next_token();
-                        right = parse_bool_expr();
-                        if (!(strcmp(token, ")")==0 || strcmp(token, "RP")==0)) error_line("缺少 ')'.");
-                        next_token();
-                    } else {
-                        error_line("运算符后缺少操作数。");
-                    }
-                    curLeft = new_binary(opbuf, curLeft, right);
-                }
-                /* after building, check relational operators */
-                if (strcmp(token, ">")==0 || strcmp(token, "<")==0 || strcmp(token, ">=")==0 || strcmp(token, "<=")==0
-                    || strcmp(token, "==")==0 || strcmp(token, "!=")==0) {
-                    char rel[8];
-                    strncpy(rel, token, sizeof(rel)-1);
-                    if (next_token() != 0) error_line("关系运算符后缺少操作数。");
-                    ASTNode *r2 = NULL;
-                    if (strcmp(token, "NUM")==0) { r2 = new_basiclit(token1); next_token(); }
-                    else if (strcmp(token, "ID")==0) { r2 = new_identifier(token1); next_token(); }
-                    else if (strcmp(token, "(")==0) { next_token(); r2 = parse_bool_expr(); if (!(strcmp(token, ")")==0)) error_line("缺少 )"); next_token(); }
-                    else error_line("关系运算符后缺少操作数。");
-                    curLeft = new_binary(rel, curLeft, r2);
-                }
-                return curLeft;
-            } else {
-                /* no operator, just return the ID node and keep current token as-is (it already points to next) */
-                return leftNode;
-            }
-        }
-    } else {
-        /* not starting with ID => parse bool_expr directly */
-        return parse_bool_expr();
-    }
-}
-
-/* bool_expr -> additive_expr ( (relop) additive_expr )? */
-ASTNode* parse_bool_expr() {
-    ASTNode *left = parse_additive_expr();
-    if (!left) return NULL;
-    /* check relational operator */
-    if (strcmp(token, ">")==0 || strcmp(token, "<")==0 || strcmp(token, ">=")==0 || strcmp(token, "<=")==0
-        || strcmp(token, "==")==0 || strcmp(token, "!=")==0) {
-        char rel[8]; strncpy(rel, token, sizeof(rel)-1);
-        if (next_token() != 0) error_line("关系运算符后缺少操作数。");
-        ASTNode *right = parse_additive_expr();
-        if (!right) error_line("关系表达式右侧解析失败。");
-        return new_binary(rel, left, right);
-    }
-    return left;
-}
-
-/* additive_expr -> term { (+|-) term } */
-ASTNode* parse_additive_expr() {
-    ASTNode *left = parse_term();
-    if (!left) return NULL;
-    while (strcmp(token, "+")==0 || strcmp(token, "-")==0) {
-        char op[4]; strncpy(op, token, sizeof(op)-1);
-        if (next_token() != 0) error_line("运算符后缺少操作数。");
-        ASTNode *right = parse_term();
-        if (!right) error_line("加减法右侧解析错误。");
-        left = new_binary(op, left, right);
-    }
-    return left;
-}
-
-/* term -> factor { (*|/) factor } */
-ASTNode* parse_term() {
-    ASTNode *left = parse_factor();
-    if (!left) return NULL;
-    while (strcmp(token, "*")==0 || strcmp(token, "/")==0) {
-        char op[4]; strncpy(op, token, sizeof(op)-1);
-        if (next_token() != 0) error_line("运算符后缺少操作数。");
-        ASTNode *right = parse_factor();
-        if (!right) error_line("乘除法右侧解析错误。");
-        left = new_binary(op, left, right);
-    }
-    return left;
-}
-
-/* factor -> '(' additive_expr ')' | ID | NUM */
-ASTNode* parse_factor() {
-    if (strcmp(token, "(")==0) {
-        if (next_token() != 0) error_line("括号内表达式错误。");
-        ASTNode *expr = parse_additive_expr();
-        if (!(strcmp(token, ")")==0 || strcmp(token, "RP")==0)) error_line("缺少 ')'。");
-        next_token();
-        return expr;
-    } else if (strcmp(token, "NUM")==0 || strcmp(token, "INT")==0) {
-        ASTNode *lit = new_basiclit(token1);
-        next_token();
-        return lit;
-    } else if (strcmp(token, "ID")==0) {
-        ASTNode *id = new_identifier(token1);
-        next_token();
-        return id;
-    } else {
-        error_line("因子不是 ID、NUM 或括号表达式。");
-    }
-    return NULL;
-}
-
-/* if '(' expr ')' statement [ else statement ] */
-ASTNode* parse_if_stat() {
-    if (strcmp(token, "if") != 0) error_line("if 语句语法错误。");
-    if (next_token() != 0) error_line("if 后缺少 '('。");
-    if (!(strcmp(token, "(")==0 || strcmp(token, "LP")==0)) error_line("if 缺少 '('。");
-    if (next_token() != 0) error_line("if 条件缺失。");
-    ASTNode *cond = parse_expression();
-    if (!(strcmp(token, ")")==0 || strcmp(token, "RP")==0)) error_line("if 缺少 ')'。");
-    if (next_token() != 0) error_line("if 后缺少语句体。");
-    ASTNode *thenb = parse_statement();
-    ASTNode *elseb = NULL;
-    if (strcmp(token, "else")==0) {
-        if (next_token() != 0) error_line("else 后缺少语句体。");
-        elseb = parse_statement();
-    }
-    return new_if(cond, thenb, elseb);
-}
-
-/* while '(' expr ')' statement */
-ASTNode* parse_while_stat() {
-    if (strcmp(token, "while") != 0) error_line("while 语句语法错误。");
-    if (next_token() != 0) error_line("while 后缺少 '('。");
-    if (!(strcmp(token, "(")==0 || strcmp(token, "LP")==0)) error_line("while 缺少 '('。");
-    if (next_token() != 0) error_line("while 条件缺失。");
-    ASTNode *cond = parse_expression();
-    if (!(strcmp(token, ")")==0 || strcmp(token, "RP")==0)) error_line("while 缺少 ')'。");
-    if (next_token() != 0) error_line("while 后缺少语句体。");
-    ASTNode *body = parse_statement();
-    return new_while(cond, body);
-}
-
-/* for '(' ID in expr ')' statement
-   Note: PDF shows form "for ( i in 1..n+1 ) stmt"  ? 本实现将 "in" 和 range 表达式作为二元组合解析，
-   简化处理：parse id, expect 'in', then parse expression as range expression (treat as expression node)
-*/
-ASTNode* parse_for_stat() {
-    if (strcmp(token, "for") != 0) error_line("for 语句语法错误。");
-    if (next_token() != 0) error_line("for 后缺少 '('。");
-    if (!(strcmp(token, "(")==0 || strcmp(token, "LP")==0)) error_line("for 缺少 '('。");
-    if (next_token() != 0) error_line("for 括号内缺少内容。");
-    if (strcmp(token, "ID") != 0) error_line("for 语句期望 ID。");
-    ASTNode *id = new_identifier(token1);
-    if (next_token() != 0) error_line("for 语句缺少 in。");
-    if (strcmp(token, "in") != 0) error_line("for 语句缺少 in。");
-    if (next_token() != 0) error_line("for in 后缺少范围表达式。");
-    ASTNode *range = parse_expression();
-    if (!(strcmp(token, ")")==0 || strcmp(token, "RP")==0)) error_line("for 缺少 ')'.");
-    if (next_token() != 0) error_line("for 后缺少语句体。");
-    ASTNode *body = parse_statement();
-    return new_for(id, range, body);
-}
-
-/* write expr ; */
-ASTNode* parse_write_stat() {
-    if (strcmp(token, "write") != 0) error_line("write 语句语法错误。");
-    if (next_token() != 0) error_line("write 后缺少表达式。");
-    ASTNode *expr = parse_expression();
-    if (!(strcmp(token, ";")==0 || strcmp(token, "SEMI")==0)) error_line("write 缺少分号。");
-    next_token();
-    return new_write(expr);
-}
-
-/* read ID ; */
-ASTNode* parse_read_stat() {
-    if (strcmp(token, "read") != 0) error_line("read 语句语法错误。");
-    if (next_token() != 0) error_line("read 后缺少标识符。");
-    if (strcmp(token, "ID") != 0) error_line("read 后应跟标识符。");
-    ASTNode *id = new_identifier(token1);
-    if (next_token() != 0) error_line("read 语句缺少分号。");
-    if (strcmp(token, ";") != 0 && strcmp(token, "SEMI") != 0) error_line("read 缺少分号。");
-    next_token();
-    return new_read(id);
-}
-
-/* call ID ( ) ;  or call ID ; (simple) */
-ASTNode* parse_call_stat() {
-    if (strcmp(token, "call") != 0) error_line("call 语句语法错误。");
-    if (next_token() != 0) error_line("call 后缺少标识符。");
-    if (strcmp(token, "ID") != 0) error_line("call 后应跟标识符。");
-    char fname[128]; strncpy(fname, token1, sizeof(fname)-1);
-    if (next_token() != 0) error_line("call 后缺少 '(' 或分号。");
-    if (strcmp(token, "(")==0 || strcmp(token, "LP")==0) {
-        if (next_token() != 0) error_line("call 缺少 ')'。");
-        if (strcmp(token, ")") != 0 && strcmp(token, "RP") != 0) error_line("call 缺少 ')'。");
-        if (next_token() != 0) error_line("call 缺少分号。");
-        if (strcmp(token, ";") != 0 && strcmp(token, "SEMI") != 0) error_line("call 缺少分号。");
-        next_token();
-    } else if (strcmp(token, ";")==0 || strcmp(token, "SEMI")==0) {
-        next_token();
-    } else {
-        error_line("call 语句格式错误。");
-    }
-    ASTNode *c = new_call(fname);
-    return c;
-}
-
-/* ---------- main ---------- */
-int main(int argc, char **argv) {
-    char filename[260];
-    printf("请输入单词流文件名（包括路径）：");
-    if (scanf("%s", filename) != 1) {
-        printf("未输入文件名。\n");
-        return 1;
-    }
-    fpTokenin = fopen(filename, "r");
-    if (!fpTokenin) {
-        printf("打开 %s 失败！\n", filename);
-        return 1;
-    }
-
-    ASTNode *root = parse_program();
-    if (!root) {
-        printf("解析失败或返回空 AST。\n");
-        fclose(fpTokenin);
-        return 1;
-    }
-
-    /* 输出 AST JSON */
-    print_json(root, 0);
     printf("\n");
 
-    fclose(fpTokenin);
-    return 0;
+    printTree(node->firstChild, level + 1);
+    printTree(node->nextSibling, level);
 }
+
+// 语法分析主程序
+int TESTparse() {
+    int es = 0;
+    printf("请输入单词流文件名（包括路径）：");
+    scanf("%s", tokenfile);
+
+    if ((fpTokenin = fopen(tokenfile, "r")) == NULL) {
+        printf("\n打开%s错误!\n", tokenfile);
+        es = 10;
+        return es;
+    }
+
+    // 创建程序节点作为根节点
+    root = createNode("Program", NULL);
+
+    es = program(&root);
+    fclose(fpTokenin);
+
+    printf("==语法分析结果==\n");
+    switch(es) {
+        case 0:
+            printf("语法分析成功!\n");
+            printf("\n语法分析树:\n");
+            printTree(root, 0);
+            break;
+        case 10: printf("打开文件 %s失败!\n", tokenfile); break;
+        case 1: printf("缺少{!\n"); break;
+        case 2: printf("缺少}!\n"); break;
+        case 3: printf("缺少标识符!\n"); break;
+        case 4: printf("少分号!\n"); break;
+        case 5: printf("缺少(!\n"); break;
+        case 6: printf("缺少)!\n"); break;
+        case 7: printf("缺少操作数!\n"); break;
+        case 11: printf("函数开头缺少{!\n"); break;
+        case 12: printf("函数结束缺少}!\n"); break;
+        case 13: printf("最后一个函数的名字应该是main!\n"); break;
+        case 24: printf("程序中main函数结束后，还有其它多余字符\n"); break;
+    }
+
+    return es;
+}
+
+// <program> → { fun_declaration } <main_declaration>
+int program(TreeNode **node) {
+    int es = 0;
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    while (!strcmp(token, "function")) {
+        TreeNode *funNode = createNode("FunctionDeclaration", NULL);
+        addChild(*node, funNode);
+
+        fscanf(fpTokenin, "%s %s\n", token, token1);
+        es = fun_declaration(funNode);
+
+        if (es != 0) return es;
+        fscanf(fpTokenin, "%s %s\n", token, token1);
+    }
+
+    if (strcmp(token, "ID")) {
+        es = 1;
+        return es;
+    }
+    if (strcmp(token1, "main")) {
+        es = 13;
+        return es;
+    }
+
+    TreeNode *mainNode = createNode("MainDeclaration", NULL);
+    addChild(*node, mainNode);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    es = main_declaration(mainNode);
+
+    if (es > 0) return es;
+
+    if (!feof(fpTokenin)) {
+        return (es = 24);
+    }
+
+    return es;
+}
+
+// <fun_declaration> → function ID '(' ')' <function_body>
+int fun_declaration(TreeNode *parent) {
+    int es = 0;
+
+    if (strcmp(token, "ID")) {
+        es = 2;
+        return es;
+    }
+
+    TreeNode *idNode = createNode("ID", token1);
+    addChild(parent, idNode);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    if (strcmp(token, "(")) {
+        es = 5;
+        return es;
+    }
+
+    TreeNode *leftParen = createNode("(", "(");
+    addChild(parent, leftParen);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    if (strcmp(token, ")")) {
+        es = 6;
+        return es;
+    }
+
+    TreeNode *rightParen = createNode(")", ")");
+    addChild(parent, rightParen);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    es = function_body(parent);
+
+    return es;
+}
+
+// <main_declaration> → main '(' ')' <function_body>
+int main_declaration(TreeNode *parent) {
+    int es = 0;
+
+    if (strcmp(token, "(")) {
+        es = 5;
+        return es;
+    }
+
+    TreeNode *leftParen = createNode("(", "(");
+    addChild(parent, leftParen);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    if (strcmp(token, ")")) {
+        es = 6;
+        return es;
+    }
+
+    TreeNode *rightParen = createNode(")", ")");
+    addChild(parent, rightParen);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    es = function_body(parent);
+
+    return es;
+}
+
+// <function_body> → '{' <declaration_list> <statement_list> '}'
+int function_body(TreeNode *parent) {
+    int es = 0;
+
+    if (strcmp(token, "{")) {
+        es = 11;
+        return es;
+    }
+
+    TreeNode *leftBrace = createNode("{", "{");
+    addChild(parent, leftBrace);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+
+    // 处理声明列表
+    TreeNode *declList = createNode("DeclarationList", NULL);
+    addChild(parent, declList);
+    es = declaration_list(declList);
+    if (es > 0) return es;
+
+    // 处理语句列表
+    TreeNode *stmtList = createNode("StatementList", NULL);
+    addChild(parent, stmtList);
+    es = statement_list(stmtList);
+    if (es > 0) return es;
+
+    if (strcmp(token, "}")) {
+        es = 12;
+        return es;
+    }
+
+    TreeNode *rightBrace = createNode("}", "}");
+    addChild(parent, rightBrace);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    return es;
+}
+
+// <declaration_list> → { <declaration_stat> }
+int declaration_list(TreeNode *parent) {
+    int es = 0;
+
+    while (strcmp(token, "int") == 0) {
+        TreeNode *declNode = createNode("Declaration", NULL);
+        addChild(parent, declNode);
+
+        es = declaration_stat(declNode);
+        if (es > 0) return es;
+    }
+
+    return es;
+}
+
+// <declaration_stat> → int ID ;
+int declaration_stat(TreeNode *parent) {
+    int es = 0;
+
+    TreeNode *typeNode = createNode("Type", "int");
+    addChild(parent, typeNode);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    if (strcmp(token, "ID")) return (es = 3);
+
+    TreeNode *idNode = createNode("ID", token1);
+    addChild(parent, idNode);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    if (strcmp(token, ";")) return (es = 4);
+
+    TreeNode *semiNode = createNode(";", ";");
+    addChild(parent, semiNode);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    return es;
+}
+
+// <statement_list> → { <statement> }
+int statement_list(TreeNode *parent) {
+    int es = 0;
+
+    while (strcmp(token, "}") != 0) {
+        TreeNode *stmtNode = createNode("Statement", NULL);
+        addChild(parent, stmtNode);
+
+        es = statement(stmtNode);
+        if (es > 0) return es;
+    }
+
+    return es;
+}
+
+// <statement> → <if_stat> | <while_stat> | <for_stat> | <compound_stat>
+//              | <expression_stat> | <call_stat> | <read_stat> | <write_stat>
+int statement(TreeNode *parent) {
+    int es = 0;
+
+    if (strcmp(token, "if") == 0) {
+        es = if_stat(parent);
+    } else if (strcmp(token, "while") == 0) {
+        es = while_stat(parent);
+    } else if (strcmp(token, "for") == 0) {
+        es = for_stat(parent);
+    } else if (strcmp(token, "read") == 0) {
+        es = read_stat(parent);
+    } else if (strcmp(token, "write") == 0) {
+        es = write_stat(parent);
+    } else if (strcmp(token, "{") == 0) {
+        es = compound_stat(parent);
+    } else if (strcmp(token, "call") == 0) {
+        es = call_stat(parent);
+    } else if (strcmp(token, "ID") == 0 || strcmp(token, "NUM") == 0 || strcmp(token, "(") == 0) {
+        es = expression_stat(parent);
+    }
+
+    return es;
+}
+
+// <if_stat> → if '(' <expr> ')' <statement> [else <statement>]
+int if_stat(TreeNode *parent) {
+    int es = 0;
+
+    TreeNode *ifNode = createNode("IfStatement", NULL);
+    addChild(parent, ifNode);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    if (strcmp(token, "(")) return (es = 5);
+
+    TreeNode *leftParen = createNode("(", "(");
+    addChild(ifNode, leftParen);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+
+    TreeNode *condition = createNode("Condition", NULL);
+    addChild(ifNode, condition);
+    es = bool_expr(condition);
+    if (es > 0) return es;
+
+    if (strcmp(token, ")")) return (es = 6);
+
+    TreeNode *rightParen = createNode(")", ")");
+    addChild(ifNode, rightParen);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+
+    TreeNode *thenStmt = createNode("ThenStatement", NULL);
+    addChild(ifNode, thenStmt);
+    es = statement(thenStmt);
+    if (es > 0) return es;
+
+    // 处理可选的else部分
+    if (strcmp(token, "else") == 0) {
+        TreeNode *elseStmt = createNode("ElseStatement", NULL);
+        addChild(ifNode, elseStmt);
+
+        fscanf(fpTokenin, "%s %s\n", token, token1);
+        es = statement(elseStmt);
+        if (es > 0) return es;
+    }
+
+    return es;
+}
+
+// <while_stat> → while '(' <expr> ')' <statement>
+int while_stat(TreeNode *parent) {
+    int es = 0;
+
+    TreeNode *whileNode = createNode("WhileStatement", NULL);
+    addChild(parent, whileNode);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    if (strcmp(token, "(")) return (es = 5);
+
+    TreeNode *leftParen = createNode("(", "(");
+    addChild(whileNode, leftParen);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+
+    TreeNode *condition = createNode("Condition", NULL);
+    addChild(whileNode, condition);
+    es = bool_expr(condition);
+    if (es > 0) return es;
+
+    if (strcmp(token, ")")) return (es = 6);
+
+    TreeNode *rightParen = createNode(")", ")");
+    addChild(whileNode, rightParen);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+
+    TreeNode *body = createNode("Body", NULL);
+    addChild(whileNode, body);
+    es = statement(body);
+
+    return es;
+}
+
+// <for_stat> → for '(' <expr> ; <expr> ; <expr> ')' <statement>
+int for_stat(TreeNode *parent) {
+    int es = 0;
+
+    TreeNode *forNode = createNode("ForStatement", NULL);
+    addChild(parent, forNode);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    if (strcmp(token, "(")) return (es = 5);
+
+    TreeNode *leftParen = createNode("(", "(");
+    addChild(forNode, leftParen);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+
+    // 初始化表达式
+    if (strcmp(token, ";") != 0) {
+        TreeNode *init = createNode("Init", NULL);
+        addChild(forNode, init);
+        es = expression(init);
+        if (es > 0) return es;
+    }
+
+    if (strcmp(token, ";")) return (es = 4);
+
+    TreeNode *semi1 = createNode(";", ";");
+    addChild(forNode, semi1);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+
+    // 条件表达式
+    if (strcmp(token, ";") != 0) {
+        TreeNode *condition = createNode("Condition", NULL);
+        addChild(forNode, condition);
+        es = bool_expr(condition);
+        if (es > 0) return es;
+    }
+
+    if (strcmp(token, ";")) return (es = 4);
+
+    TreeNode *semi2 = createNode(";", ";");
+    addChild(forNode, semi2);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+
+    // 增量表达式
+    if (strcmp(token, ")") != 0) {
+        TreeNode *increment = createNode("Increment", NULL);
+        addChild(forNode, increment);
+        es = expression(increment);
+        if (es > 0) return es;
+    }
+
+    if (strcmp(token, ")")) return (es = 6);
+
+    TreeNode *rightParen = createNode(")", ")");
+    addChild(forNode, rightParen);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+
+    TreeNode *body = createNode("Body", NULL);
+    addChild(forNode, body);
+    es = statement(body);
+
+    return es;
+}
+
+// <write_stat> → write <expression> ;
+int write_stat(TreeNode *parent) {
+    int es = 0;
+
+    TreeNode *writeNode = createNode("WriteStatement", NULL);
+    addChild(parent, writeNode);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+
+    TreeNode *exprNode = createNode("Expression", NULL);
+    addChild(writeNode, exprNode);
+    es = expression(exprNode);
+    if (es > 0) return es;
+
+    if (strcmp(token, ";")) return (es = 4);
+
+    TreeNode *semiNode = createNode(";", ";");
+    addChild(writeNode, semiNode);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    return es;
+}
+
+// <read_stat> → read ID ;
+int read_stat(TreeNode *parent) {
+    int es = 0;
+
+    TreeNode *readNode = createNode("ReadStatement", NULL);
+    addChild(parent, readNode);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    if (strcmp(token, "ID")) return (es = 3);
+
+    TreeNode *idNode = createNode("ID", token1);
+    addChild(readNode, idNode);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    if (strcmp(token, ";")) return (es = 4);
+
+    TreeNode *semiNode = createNode(";", ";");
+    addChild(readNode, semiNode);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    return es;
+}
+
+// <compound_stat> → '{' <statement_list> '}'
+int compound_stat(TreeNode *parent) {
+    int es = 0;
+
+    TreeNode *compoundNode = createNode("CompoundStatement", NULL);
+    addChild(parent, compoundNode);
+
+    TreeNode *leftBrace = createNode("{", "{");
+    addChild(compoundNode, leftBrace);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+
+    TreeNode *stmtList = createNode("StatementList", NULL);
+    addChild(compoundNode, stmtList);
+    es = statement_list(stmtList);
+
+    if (strcmp(token, "}")) return (es = 2);
+
+    TreeNode *rightBrace = createNode("}", "}");
+    addChild(compoundNode, rightBrace);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    return es;
+}
+
+// <call_stat> → call ID ( )
+int call_stat(TreeNode *parent) {
+    int es = 0;
+
+    TreeNode *callNode = createNode("CallStatement", NULL);
+    addChild(parent, callNode);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    if (strcmp(token, "ID")) return (es = 3);
+
+    TreeNode *idNode = createNode("ID", token1);
+    addChild(callNode, idNode);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    if (strcmp(token, "(")) return (es = 5);
+
+    TreeNode *leftParen = createNode("(", "(");
+    addChild(callNode, leftParen);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    if (strcmp(token, ")")) return (es = 6);
+
+    TreeNode *rightParen = createNode(")", ")");
+    addChild(callNode, rightParen);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    if (strcmp(token, ";")) return (es = 4);
+
+    TreeNode *semiNode = createNode(";", ";");
+    addChild(callNode, semiNode);
+
+    fscanf(fpTokenin, "%s %s\n", token, token1);
+    return es;
+}
+
+// <expression_stat> → <expression> ; | ;
+int expression_stat(TreeNode *parent) {
+    int es = 0;
+
+    TreeNode *exprStmtNode = createNode("ExpressionStatement", NULL);
+    addChild(parent, exprStmtNode);
+
+    if (strcmp(token, ";") == 0) {
+        TreeNode *semiNode = createNode(";", ";");
+        addChild(exprStmtNode, semiNode);
+        fscanf(fpTokenin, "%s %s\n", token, token1);
+        return es;
+    }
+
+    TreeNode *exprNode = createNode("Expression", NULL);
+    addChild(exprStmtNode, exprNode);
+    es = expression(exprNode);
+    if (es > 0) return es;
+
+    if (strcmp(token, ";") == 0) {
+        TreeNode *semiNode = createNode(";", ";");
+        addChild(exprStmtNode, semiNode);
+        fscanf(fpTokenin, "%s %s\n", token, token1);
+        return es;
+    } else {
+        return (es = 4); // 少分号
+    }
+}
+
+// <expression> → ID = <bool_expr> | <bool_expr>
+int expression(TreeNode *parent) {
+    int es = 0;
+
+    TreeNode *exprNode = createNode("Expression", NULL);
+    addChild(parent, exprNode);
+
+    // 检查是否是赋值表达式
+    if (strcmp(token, "ID") == 0) {
+        TreeNode *idNode = createNode("ID", token1);
+        addChild(exprNode, idNode);
+
+        // 预读下一个token
+        char nextToken[20], nextToken1[40];
+        long pos = ftell(fpTokenin);
+        fscanf(fpTokenin, "%s %s\n", nextToken, nextToken1);
+        fseek(fpTokenin, pos, SEEK_SET);
+
+        if (strcmp(nextToken, "=") == 0) {
+            // 是赋值表达式
+            TreeNode *assignNode = createNode("Assignment", NULL);
+            addChild(exprNode, assignNode);
+            addChild(assignNode, idNode);
+
+            fscanf(fpTokenin, "%s %s\n", token, token1); // 读取 '='
+            TreeNode *opNode = createNode("=", "=");
+            addChild(assignNode, opNode);
+
+            fscanf(fpTokenin, "%s %s\n", token, token1);
+            es = bool_expr(assignNode);
+            return es;
+        }
+    }
+
+    // 不是赋值表达式，直接处理bool_expr
+    es = bool_expr(exprNode);
+    return es;
+}
+
+// <bool_expr> → <additive_expr> | <additive_expr> (>|<|>=|<=|==|!=) <additive_expr>
+int bool_expr(TreeNode *parent) {
+    int es = 0;
+
+    TreeNode *boolNode = createNode("BoolExpression", NULL);
+    addChild(parent, boolNode);
+
+    es = additive_expr(boolNode);
+    if (es > 0) return es;
+
+    if (strcmp(token, ">") == 0 || strcmp(token, ">=") == 0
+        || strcmp(token, "<") == 0 || strcmp(token, "<=") == 0
+        || strcmp(token, "==") == 0 || strcmp(token, "!=") == 0) {
+
+        TreeNode *opNode = createNode("RelOp", token);
+        addChild(boolNode, opNode);
+
+        fscanf(fpTokenin, "%s %s\n", token, token1);
+        es = additive_expr(boolNode);
+    }
+
+    return es;
+}
+
+// <additive_expr> → <term> {(+|-) <term>}
+int additive_expr(TreeNode *parent) {
+    int es = 0;
+
+    TreeNode *addNode = createNode("AdditiveExpression", NULL);
+    addChild(parent, addNode);
+
+    es = term(addNode);
+    if (es > 0) return es;
+
+    while (strcmp(token, "+") == 0 || strcmp(token, "-") == 0) {
+        TreeNode *opNode = createNode("AddOp", token);
+        addChild(addNode, opNode);
+
+        fscanf(fpTokenin, "%s %s\n", token, token1);
+        es = term(addNode);
+        if (es > 0) return es;
+    }
+
+    return es;
+}
+
+// <term> → <factor> {(*|/) <factor>}
+int term(TreeNode *parent) {
+    int es = 0;
+
+    TreeNode *termNode = createNode("Term", NULL);
+    addChild(parent, termNode);
+
+    es = factor(termNode);
+    if (es > 0) return es;
+
+    while (strcmp(token, "*") == 0 || strcmp(token, "/") == 0) {
+        TreeNode *opNode = createNode("MulOp", token);
+        addChild(termNode, opNode);
+
+        fscanf(fpTokenin, "%s %s\n", token, token1);
+        es = factor(termNode);
+        if (es > 0) return es;
+    }
+
+    return es;
+}
+
+// <factor> → '(' <additive_expr> ')' | ID | NUM
+int factor(TreeNode *parent) {
+    int es = 0;
+
+    TreeNode *factorNode = createNode("Factor", NULL);
+    addChild(parent, factorNode);
+
+    if (strcmp(token, "(") == 0) {
+        TreeNode *leftParen = createNode("(", "(");
+        addChild(factorNode, leftParen);
+
+        fscanf(fpTokenin, "%s %s\n", token, token1);
+        es = additive_expr(factorNode);
+        if (es > 0) return es;
+
+        if (strcmp(token, ")")) return (es = 6);
+
+        TreeNode *rightParen = createNode(")", ")");
+        addChild(factorNode, rightParen);
+
+        fscanf(fpTokenin, "%s %s\n", token, token1);
+    } else if (strcmp(token, "ID") == 0) {
+        TreeNode *idNode = createNode("ID", token1);
+        addChild(factorNode, idNode);
+        fscanf(fpTokenin, "%s %s\n", token, token1);
+    } else if (strcmp(token, "NUM") == 0) {
+        TreeNode *numNode = createNode("NUM", token1);
+        addChild(factorNode, numNode);
+        fscanf(fpTokenin, "%s %s\n", token, token1);
+    } else {
+        return (es = 7); // 缺少操作数
+    }
+
+    return es;
+}
+
+int main() {
+    return TESTparse();
+}
+/*// TESTparse_full_parser.c
+// 完整版语法分析器
+
+#include <stdio.h>
+#include <ctype.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdarg.h>
+
+#define maxsymbolIndex 100
+
+enum Category_symbol {variable,function};
+
+int TESTparse();
+int program();
+int fun_declaration();
+int main_declaration();
+int function_body();
+int compound_stat();
+int statement();
+int expression_stat();
+int expression();
+int bool_expr();
+int additive_expr();
+int term();
+int factor();
+int if_stat();
+int while_stat();
+int for_stat();
+int write_stat();
+int read_stat();
+int declaration_stat();
+int declaration_list();
+int statement_list();
+int compound_stat();
+int call_stat();
+int insert_Symbol(enum Category_symbol category, char *name);
+int lookup(char *name, int *pPosition);
+
+char token[64], token1[256];
+char tokenfile[260];
+
+FILE *fpTokenin;
+
+struct
+{
+    char name[64];
+    enum Category_symbol kind;
+    int address;
+} symbol[maxsymbolIndex];
+
+int symbolIndex = 0;
+int offset;
+
+// 用于生成语法树文本
+char *astText = NULL;
+size_t astCap = 0;
+int indentLevel = 0;
+
+void ast_init(){
+    astCap = 1<<16;
+    astText = (char*)malloc(astCap);
+    astText[0] = '\0';
+}
+
+void ast_add_indent() {
+    for (int i = 0; i < indentLevel; i++) {
+        strcat(astText, "  ");
+    }
+}
+
+void ast_append(const char *fmt, ...){
+    va_list ap;
+    va_start(ap, fmt);
+    size_t cur = strlen(astText);
+    char tmp[4096];
+    vsnprintf(tmp, sizeof(tmp), fmt, ap);
+    va_end(ap);
+    size_t need = strlen(tmp);
+    if(cur + need + 16 > astCap){
+        astCap = (cur + need + 16) * 2;
+        astText = (char*)realloc(astText, astCap);
+    }
+    strcat(astText, tmp);
+}
+
+void ast_begin(const char *name) {
+    ast_add_indent();
+    ast_append("%s:\n", name);
+    indentLevel++;
+}
+
+void ast_end() {
+    if (indentLevel > 0) {
+        indentLevel--;
+    }
+}
+
+void ast_add_attr(const char *attr, const char *value) {
+    ast_add_indent();
+    ast_append("  %s: %s\n", attr, value);
+}
+
+// 修复token读取函数
+int read_next_token() {
+    char line[512];
+
+    if (fgets(line, sizeof(line), fpTokenin) == NULL) {
+        token[0] = '\0';
+        token1[0] = '\0';
+        return 0;
+    }
+
+    line[strcspn(line, "\n")] = '\0';
+
+    // 解析格式：token类型 + 多个空格 + token值
+    // 例如："main     main"
+
+    // 找到第一个连续空格的位置
+    char *token_end = line;
+    while (*token_end != ' ' && *token_end != '\t' && *token_end != '\0') {
+        token_end++;
+    }
+
+    // 提取token类型
+    int type_len = token_end - line;
+    if (type_len > 63) type_len = 63;
+    strncpy(token, line, type_len);
+    token[type_len] = '\0';
+
+    // 跳过连续的空格
+    char *value_start = token_end;
+    while (*value_start == ' ' || *value_start == '\t') {
+        value_start++;
+    }
+
+    // 提取token值
+    if (*value_start != '\0') {
+        strncpy(token1, value_start, 255);
+        token1[255] = '\0';
+    } else {
+        token1[0] = '\0';
+    }
+
+    printf("读取token: type='%s' value='%s'\n", token, token1);
+    return 1;
+}
+
+int TESTparse()
+{
+    int i;
+    int es = 0;
+    printf("请输入单词流文件名（包括路径）：");
+    if(scanf("%s", tokenfile)!=1) return 10;
+    if((fpTokenin = fopen(tokenfile, "r")) == NULL){
+        printf("\n打开%s错误!\n",tokenfile );
+        es = 10;
+        return(es);
+       }
+
+    ast_init();
+    ast_append("语法分析树：\n");
+    ast_append("==========\n\n");
+
+    if (!read_next_token()) {
+        printf("错误: 文件为空\n");
+        return 10;
+    }
+
+    es = program();
+    fclose(fpTokenin);
+
+    printf("==语法、语义分析程序结果==\n");
+    switch(es){
+        case 0: printf("语法、语义分析成功!\n"); break;
+        case 10: printf("打开文件 %s失败!\n", tokenfile); break;
+        case 1: printf("缺少{!\n"); break;
+        case 2: printf("缺少}!\n"); break;
+        case 3: printf("缺少标识符!\n"); break;
+        case 4: printf("少分号!\n"); break;
+        case 5: printf("缺少(!\n"); break;
+        case 6: printf("缺少)!\n"); break;
+        case 7: printf("缺少操作数!\n"); break;
+        case 11: printf("函数开头缺少{!\n"); break;
+        case 12: printf("函数结束缺少}!\n"); break;
+        case 13:printf("最后一个函数的名字应该是main!\n"); break;
+        case 21: printf("符号表溢出!\n"); break;
+        case 22: printf("变量%s重复定义!\n",token1); break;
+        case 23: printf("变量未声明!\n"); break;
+        case 24:printf("程序中main函数结束后，还有其它多余字符\n");break;
+        case 32: printf("函数名重复定义!\n"); break;
+        case 34: printf("call语句后面的标识符%s不是函数名!\n",token1 ); break;
+        case 35: printf("read语句后面的标识符不是变量名!\n"); break;
+        case 36: printf("赋值语句的左值%s不是变量名!\n",token1); break;
+        case 37: printf("因子对应的标识符不是变量名!\n"); break;
+        }
+
+    char astfile[512];
+    snprintf(astfile,sizeof(astfile),"%s.ast.txt", tokenfile);
+    FILE *fasta = fopen(astfile, "w");
+    if(fasta){
+        fputs(astText, fasta);
+        fclose(fasta);
+        printf("语法树已输出到 %s\n", astfile);
+    } else {
+        printf("无法创建语法树文件 %s\n", astfile);
+    }
+
+    printf("\n生成的语法树：\n");
+    printf("============\n");
+    printf("%s", astText);
+
+    printf("\n        符号表\n");
+    printf(" 名字\t \t类型 \t地址\n");
+    for(i = 0; i < symbolIndex; i++)
+        printf("  %-8s \t%d \t%d\n", symbol[i].name, symbol[i].kind,symbol[i].address);
+
+    free(astText);
+    return(es);
+}
+
+int program()
+{
+    int es = 0;
+
+    ast_begin("Program");
+
+    // 修改：直接检查token值是否为"main"，而不是检查token类型
+    if(strcmp(token, "main") != 0 || strcmp(token1, "main") != 0) {
+        printf("期望main，得到: %s %s\n", token, token1);
+        es=13;
+        return es;
+    }
+
+    ast_add_attr("type", "main_declaration");
+    insert_Symbol(function,"main");
+
+    if (!read_next_token()) return 10;
+
+    es=main_declaration();
+    if(es > 0) return(es);
+
+    ast_end();
+    return(es);
+}
+
+int main_declaration()
+{
+    int es=0;
+
+    ast_begin("MainFunction");
+    ast_add_attr("ID", "main");
+
+    // 现在检查token值而不是类型
+    if(strcmp(token, "(") != 0 || strcmp(token1, "(") != 0){
+        printf("期望(，得到: %s %s\n", token, token1);
+        es=5;
+        return es;
+    }
+
+    if (!read_next_token()) return 10;
+
+    if(strcmp(token, ")") != 0 || strcmp(token1, ")") != 0) {
+        printf("期望)，得到: %s %s\n", token, token1);
+        es=6;
+        return es;
+    }
+
+    if (!read_next_token()) return 10;
+
+    es= function_body();
+    if(es > 0) return es;
+
+    ast_end();
+    return es;
+}
+
+int function_body()
+{
+    int es=0;
+
+    ast_begin("Function_Body");
+
+    if(strcmp(token,"{")){
+        printf("期望{，得到: %s\n", token);
+        es=11;
+        return(es);
+    }
+
+    offset=2;
+    if (!read_next_token()) return 10;
+
+    es=declaration_list();
+    if (es>0) return(es);
+
+    es=statement_list();
+    if (es>0) return(es);
+
+    if(strcmp(token,"}")){
+        printf("期望}，得到: %s\n", token);
+        es=12;
+        return(es);
+    }
+
+    ast_end();
+    read_next_token();
+    return es;
+}
+
+int declaration_list()
+{
+    int es = 0;
+
+    ast_begin("DeclarationList");
+
+    while(strcmp(token, "var") == 0) {
+        es = declaration_stat();
+        if(es > 0) return(es);
+    }
+
+    ast_end();
+    return(es);
+}
+
+int declaration_stat()
+{
+    int es = 0;
+
+    ast_begin("VariableDeclaration");
+
+    if (!read_next_token()) return 10;
+    if(strcmp(token, "ID")) {
+        printf("期望ID，得到: %s\n", token);
+        return(es = 3);
+    }
+
+    ast_add_attr("name", token1);
+
+    es = insert_Symbol(variable,token1);
+    if(es > 0) return(es);
+
+    if (!read_next_token()) return 10;
+    if(strcmp(token, ":")) {
+        printf("期望:，得到: %s\n", token);
+        return(es = 4);
+    }
+
+    if (!read_next_token()) return 10;
+    if(strcmp(token, "int") == 0) {
+        ast_add_attr("type", "int");
+    }
+    else if(strcmp(token, "double") == 0) {
+        ast_add_attr("type", "double");
+    }
+    else if(strcmp(token, "ID") == 0) {
+        ast_add_attr("type", token1);
+    }
+    else {
+        printf("期望类型，得到: %s\n", token);
+        return(es = 4);
+    }
+
+    // 仓颉语言：变量声明不需要分号
+    // 直接读取下一个token
+    if (!read_next_token()) return 10;
+
+    ast_end();
+    return(es);
+}
+
+int statement_list()
+{
+    int es = 0;
+
+    ast_begin("StatementList");
+
+    while(strcmp(token, "}") != 0 && !feof(fpTokenin)) {
+        printf("解析语句，当前token: %s %s\n", token, token1);
+        es = statement();
+        if(es > 0) return es;
+    }
+
+    ast_end();
+    return es;
+}
+
+int statement()
+{
+    int es = 0;
+
+    printf("解析statement，当前token: %s %s\n", token, token1);
+
+    if(strcmp(token, "if") == 0) {
+        ast_begin("IfStatement");
+        es = if_stat();
+        ast_end();
+    }
+    else if(strcmp(token, "while") == 0) {
+        ast_begin("WhileStatement");
+        es = while_stat();
+        ast_end();
+    }
+    else if(strcmp(token, "for") == 0) {
+        ast_begin("ForStatement");
+        es = for_stat();
+        ast_end();
+    }
+    else if(strcmp(token, "{") == 0) {
+        ast_begin("CompoundStatement");
+        es = compound_stat();
+        ast_end();
+    }
+    else if(strcmp(token, "call") == 0) {
+        ast_begin("CallStatement");
+        es = call_stat();
+        ast_end();
+    }
+    else if(strcmp(token, "read") == 0) {
+        ast_begin("ReadStatement");
+        es = read_stat();
+        ast_end();
+    }
+    else if(strcmp(token, "write") == 0) {
+        ast_begin("WriteStatement");
+        es = write_stat();
+        ast_end();
+    }
+    else if(strcmp(token, "ID") == 0) {
+        // 赋值语句或表达式语句
+        ast_begin("AssignmentOrExpression");
+        es = expression();
+        ast_end();
+
+        // 仓颉语言：语句可以没有分号
+        if(es == 0 && strcmp(token, ";") == 0) {
+            // 如果有分号，跳过
+            if (!read_next_token()) return 10;
+        }
+    }
+    else if(strcmp(token, "NUM") == 0 || strcmp(token, "(") == 0) {
+        ast_begin("ExpressionStatement");
+        es = expression_stat();
+        ast_end();
+    }
+    else if(strcmp(token, ";") == 0) {
+        ast_begin("EmptyStatement");
+        ast_add_attr("type", "empty");
+        if (!read_next_token()) return 10;
+        ast_end();
+    }
+    else if(strcmp(token, "var") == 0) {
+        es = declaration_stat();
+    }
+    else {
+        printf("错误: 未知语句类型: %s %s\n", token, token1);
+        es = 4;
+    }
+
+    return es;
+}
+
+int if_stat()
+{
+    int es = 0;
+
+    ast_add_attr("keyword", "if");
+
+    if (!read_next_token()) return 10;
+    if(strcmp(token, "(")) {
+        printf("期望(，得到: %s\n", token);
+        return 5;
+    }
+
+    if (!read_next_token()) return 10;
+    ast_begin("Condition");
+    es = bool_expr();
+    ast_end();
+    if(es > 0) return es;
+
+    if(strcmp(token, ")")) {
+        printf("期望)，得到: %s\n", token);
+        return 6;
+    }
+
+    if (!read_next_token()) return 10;
+    ast_begin("ThenBranch");
+    es = statement();
+    ast_end();
+    if(es > 0) return es;
+
+    if(strcmp(token, "else") == 0) {
+        ast_add_attr("has_else", "true");
+        if (!read_next_token()) return 10;
+        ast_begin("ElseBranch");
+        es = statement();
+        ast_end();
+    } else {
+        ast_add_attr("has_else", "false");
+    }
+
+    return es;
+}
+
+int while_stat()
+{
+    int es = 0;
+
+    ast_add_attr("keyword", "while");
+
+    if (!read_next_token()) return 10;
+    if(strcmp(token, "(")) {
+        printf("期望(，得到: %s\n", token);
+        return 5;
+    }
+
+    if (!read_next_token()) return 10;
+    ast_begin("Condition");
+    es = bool_expr();
+    ast_end();
+    if(es > 0) return es;
+
+    if(strcmp(token, ")")) {
+        printf("期望)，得到: %s\n", token);
+        return 6;
+    }
+
+    if (!read_next_token()) return 10;
+    ast_begin("LoopBody");
+    es = statement();
+    ast_end();
+
+    return es;
+}
+
+int for_stat()
+{
+    int es = 0;
+
+    ast_add_attr("keyword", "for");
+
+    if (!read_next_token()) return 10;
+    if(strcmp(token, "(")) {
+        printf("期望(，得到: %s\n", token);
+        return 5;
+    }
+
+    if (!read_next_token()) return 10;
+    if(strcmp(token, ";") != 0) {
+        ast_begin("Initialization");
+        es = expression();
+        ast_end();
+        if(es > 0) return es;
+    }
+
+    if(strcmp(token, ";")) {
+        printf("期望;，得到: %s\n", token);
+        return 4;
+    }
+
+    if (!read_next_token()) return 10;
+    if(strcmp(token, ";") != 0) {
+        ast_begin("Condition");
+        es = bool_expr();
+        ast_end();
+        if(es > 0) return es;
+    }
+
+    if(strcmp(token, ";")) {
+        printf("期望;，得到: %s\n", token);
+        return 4;
+    }
+
+    if (!read_next_token()) return 10;
+    if(strcmp(token, ")") != 0) {
+        ast_begin("Increment");
+        es = expression();
+        ast_end();
+        if(es > 0) return es;
+    }
+
+    if(strcmp(token, ")")) {
+        printf("期望)，得到: %s\n", token);
+        return 6;
+    }
+
+    if (!read_next_token()) return 10;
+    ast_begin("LoopBody");
+    es = statement();
+    ast_end();
+
+    return es;
+}
+
+int compound_stat()
+{
+    int es = 0;
+
+    ast_add_attr("start", "{");
+
+    if (!read_next_token()) return 10;
+
+    ast_begin("StatementList");
+    es = statement_list();
+    ast_end();
+    if(es > 0) return es;
+
+    if(strcmp(token, "}")) {
+        printf("期望}，得到: %s\n", token);
+        return 12;
+    }
+
+    ast_add_attr("end", "}");
+
+    if (!read_next_token()) return 10;
+
+    return es;
+}
+
+int call_stat()
+{
+    int es = 0;
+    int symbolPos;
+
+    if (!read_next_token()) return 10;
+    if(strcmp(token, "ID")) {
+        printf("期望ID，得到: %s\n", token);
+        return 3;
+    }
+
+    ast_add_attr("function_name", token1);
+
+    if(lookup(token1, &symbolPos) != 0) {
+        printf("函数%s未声明\n", token1);
+        return 34;
+    }
+    if(symbol[symbolPos].kind != function) {
+        printf("%s不是函数名\n", token1);
+        return 34;
+    }
+
+    if (!read_next_token()) return 10;
+    if(strcmp(token, "(")) {
+        printf("期望(，得到: %s\n", token);
+        return 5;
+    }
+
+    if (!read_next_token()) return 10;
+    if(strcmp(token, ")")) {
+        printf("期望)，得到: %s\n", token);
+        return 6;
+    }
+
+    if (!read_next_token()) return 10;
+    if(strcmp(token, ";")) {
+        printf("期望;，得到: %s\n", token);
+        return 4;
+    }
+
+    if (!read_next_token()) return 10;
+
+    return es;
+}
+
+int read_stat()
+{
+    int es = 0;
+    int pos;
+
+    ast_add_attr("keyword", "read");
+
+    if (!read_next_token()) return 10;
+    if(strcmp(token, "ID")) {
+        printf("期望ID，得到: %s\n", token);
+        return 3;
+    }
+
+    ast_add_attr("variable_name", token1);
+
+    if(lookup(token1, &pos) != 0) {
+        printf("变量%s未声明\n", token1);
+        return 35;
+    }
+    if(symbol[pos].kind != variable) {
+        printf("%s不是变量名\n", token1);
+        return 35;
+    }
+
+    if (!read_next_token()) return 10;
+    if(strcmp(token, ";")) {
+        printf("期望;，得到: %s\n", token);
+        return 4;
+    }
+
+    if (!read_next_token()) return 10;
+
+    return es;
+}
+
+int write_stat()
+{
+    int es = 0;
+
+    ast_add_attr("keyword", "write");
+
+    if (!read_next_token()) return 10;
+    ast_begin("Expression");
+    es = expression();
+    ast_end();
+    if(es > 0) return es;
+
+    if(strcmp(token, ";")) {
+        printf("期望;，得到: %s\n", token);
+        return 4;
+    }
+
+    if (!read_next_token()) return 10;
+
+    return es;
+}
+
+int expression_stat()
+{
+    int es = 0;
+
+    // 空表达式语句
+    if(strcmp(token, ";") == 0) {
+        ast_add_attr("type", "empty_expression");
+        if (!read_next_token()) return 10;
+        return 0;
+    }
+
+    ast_begin("Expression");
+    es = expression();
+    ast_end();
+    if(es > 0) return es;
+
+    // 仓颉语言：表达式语句可以没有分号
+    // 如果有分号就跳过，没有就直接继续
+    if(strcmp(token, ";") == 0) {
+        if (!read_next_token()) return 10;
+    }
+
+    return es;
+}
+
+int expression()
+{
+    int es = 0;
+    ast_begin("Expression");
+
+    printf("进入expression，当前token: %s %s\n", token, token1);
+
+    // 先检查是否是自增/自减表达式 (++x 或 x++)
+    if(strcmp(token, "ID") == 0) {
+        char var_name[256];
+        strcpy(var_name, token1);
+
+        // 保存当前变量信息
+        ast_begin("LeftValue");
+        ast_add_attr("variable", var_name);
+        ast_end();
+
+        // 查看下一个token
+        if (!read_next_token()) {
+            ast_end();
+            return 0;
+        }
+
+        if(strcmp(token, "=") == 0) {
+            // 赋值表达式: x = ...
+            ast_add_attr("operator", "assignment");
+
+            if (!read_next_token()) {
+                ast_end();
+                return 10;
+            }
+
+            ast_begin("RightValue");
+            es = bool_expr();
+            ast_end();
+        }
+        else if(strcmp(token, "++") == 0 || strcmp(token, "--") == 0) {
+            // 后置自增/自减: x++ 或 x--
+            ast_add_attr("operator", token);
+            ast_add_attr("position", "postfix");
+
+            // 读取下一个token并直接返回，这是一个完整的表达式
+            if (!read_next_token()) {
+                ast_end();
+                return 10;
+            }
+            // 直接返回，不进入bool_expr
+            ast_end();
+            return 0;
+        }
+        else {
+            // 其他情况，可能是普通表达式如 x + 1
+            // 回退到bool_expr解析
+            es = bool_expr();
+        }
+    }
+    else if(strcmp(token, "++") == 0 || strcmp(token, "--") == 0) {
+        // 前置自增/自减: ++x 或 --x
+        char op[4];
+        strcpy(op, token);
+        ast_add_attr("operator", op);
+        ast_add_attr("position", "prefix");
+
+        if (!read_next_token()) {
+            ast_end();
+            return 10;
+        }
+
+        if(strcmp(token, "ID") != 0) {
+            printf("期望标识符，得到: %s\n", token);
+            ast_end();
+            return 7;
+        }
+
+        ast_begin("Operand");
+        ast_add_attr("variable", token1);
+        ast_end();
+
+        // 读取下一个token并返回
+        if (!read_next_token()) {
+            ast_end();
+            return 10;
+        }
+        ast_end();
+        return 0;
+    }
+    else {
+        // 普通表达式
+        es = bool_expr();
+    }
+
+    ast_end();
+    return es;
+}
+
+int bool_expr()
+{
+    int es = 0;
+    ast_begin("BoolExpression");
+
+    es = additive_expr();
+    if(es > 0) {
+        ast_end();
+        return es;
+    }
+
+    if(strcmp(token, ">") == 0 || strcmp(token, ">=") == 0 ||
+       strcmp(token, "<") == 0 || strcmp(token, "<=") == 0 ||
+       strcmp(token, "==") == 0 || strcmp(token, "!=") == 0) {
+
+        char op[8];
+        strcpy(op, token);
+        ast_add_attr("relational_operator", op);
+
+        if (!read_next_token()) {
+            ast_end();
+            return 10;
+        }
+
+        ast_begin("RightOperand");
+        es = additive_expr();
+        ast_end();
+    }
+
+    ast_end();
+    return es;
+}
+
+int term()
+{
+    int es = 0;
+    ast_begin("Term");
+
+    es = factor();
+    if(es > 0) {
+        ast_end();
+        return es;
+    }
+
+    // 只有在当前token是 * 或 / 时才继续解析
+    // 如果当前token是 ; } 等其他符号，说明表达式已经结束
+    while(strcmp(token, "*") == 0 || strcmp(token, "/") == 0) {
+        char op[4];
+        strcpy(op, token);
+        ast_add_attr("multiplicative_operator", op);
+
+        if (!read_next_token()) {
+            ast_end();
+            return 10;
+        }
+
+        ast_begin("RightFactor");
+        es = factor();
+        ast_end();
+        if(es > 0) break;
+    }
+
+    ast_end();
+    return es;
+}
+
+int additive_expr()
+{
+    int es = 0;
+    ast_begin("AdditiveExpression");
+
+    es = term();
+    if(es > 0) {
+        ast_end();
+        return es;
+    }
+
+    // 只有在当前token是 + 或 - 时才继续解析
+    while(strcmp(token, "+") == 0 || strcmp(token, "-") == 0) {
+        char op[4];
+        strcpy(op, token);
+        ast_add_attr("additive_operator", op);
+
+        if (!read_next_token()) {
+            ast_end();
+            return 10;
+        }
+
+        ast_begin("RightTerm");
+        es = term();
+        ast_end();
+        if(es > 0) break;
+    }
+
+    ast_end();
+    return es;
+}
+
+int factor()
+{
+    int es = 0;
+    ast_begin("Factor");
+
+    if(strcmp(token, "(") == 0) {
+        ast_add_attr("type", "parenthesized_expression");
+
+        if (!read_next_token()) {
+            ast_end();
+            return 10;
+        }
+
+        es = expression();
+        if(es > 0) {
+            ast_end();
+            return es;
+        }
+
+        if(strcmp(token, ")") != 0) {
+            printf("期望)，得到: %s\n", token);
+            ast_end();
+            return 6;
+        }
+
+        if (!read_next_token()) {
+            ast_end();
+            return 10;
+        }
+    }
+    else if(strcmp(token, "ID") == 0) {
+        ast_add_attr("type", "variable");
+        ast_add_attr("name", token1);
+        if (!read_next_token()) {
+            ast_end();
+            return 0;
+        }
+    }
+    else if(strcmp(token, "NUM") == 0) {
+        ast_add_attr("type", "number");
+        ast_add_attr("value", token1);
+        if (!read_next_token()) {
+            ast_end();
+            return 10;
+        }
+    }
+    else {
+        printf("期望因子，得到: %s\n", token);
+        ast_end();
+        return 7;
+    }
+
+    ast_end();
+    return es;
+}
+
+int insert_Symbol(enum Category_symbol category, char *name)
+{
+    int i, es = 0;
+
+    if(symbolIndex >= maxsymbolIndex) return(21);
+    switch (category) {
+        case function:
+            for(i = symbolIndex - 1; i >= 0; i--) {
+                if((strcmp(symbol[i].name, name) == 0)&&(symbol[i].kind==function)){
+                    es = 32;
+                    break;
+                }
+            }
+            symbol[symbolIndex].kind=function;
+            break;
+        case variable:
+            for(i = symbolIndex - 1; i >= 0; i--) {
+                if((strcmp(symbol[i].name, name) == 0)&&(symbol[i].kind==variable)){
+                    es = 22;
+                    break;
+                }
+            }
+            symbol[symbolIndex].kind=variable;
+            symbol[symbolIndex].address = offset;
+            offset++;
+            break;
+    }
+    if(es > 0) return(es);
+    strcpy(symbol[symbolIndex].name, name);
+    symbolIndex++;
+    return es;
+}
+
+int lookup(char *name, int *pPosition)
+{
+    int i;
+    for(i = symbolIndex - 1; i >= 0; i--){
+        if(strcmp(symbol[i].name, name) == 0){
+            *pPosition = i;
+            return 0;
+        }
+    }
+    return 23;
+}
+
+int main(){
+    return TESTparse();
+}*/
