@@ -227,8 +227,6 @@ int TESTparse() {
             break;
         case 23: printf("变量未声明!\n");
             break;
-        case 24: printf("程序中main函数结束后，还有其它多余字符\n");
-            break;
         case 32: printf("函数名重复定义!\n");
             break;
         default: if (es > 0) printf("错误码: %d\n", es);
@@ -753,7 +751,7 @@ int write_stat() {
     if (es > 0) return es;
 
 
-    //if (!read_next_token()) return 10;
+    if (!read_next_token()) return 10;
 
     return es;
 }
