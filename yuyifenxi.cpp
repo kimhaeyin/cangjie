@@ -7,6 +7,39 @@
 #define maxsymbolIndex 100
 #define MAX_CODES 200
 
+// ===================== 函数声明 =====================
+int TESTparse();
+int program();
+int main_declaration();
+int function_body();
+int statement();
+int expression_stat();
+int expression();
+int bool_expr();
+int additive_expr();
+int term();
+int factor();
+int if_stat();
+int while_stat();
+int for_stat();
+int write_stat();
+int read_stat();
+int declaration_stat();
+int declaration_list();
+int statement_list();
+int compound_stat();
+int call_stat();
+int lookup(char *name, int *pPosition) ;
+
+// 数据类型枚举
+enum DataType {
+    TYPE_INT,
+    TYPE_FLOAT,
+    TYPE_DOUBLE,
+    TYPE_CHAR,
+    TYPE_UNKNOWN
+};
+
 enum Category_symbol { variable, function };
 
 // 中间代码结构
@@ -16,15 +49,17 @@ typedef struct Code {
 } Code;
 
 Code codes[MAX_CODES];
-int codesIndex = 0;      // codes数组第一个空元素的下标
-int temp_var_count = 0;  // 临时变量计数
-int label_count = 0;     // 标签计数
+int codesIndex = 0;
+int temp_var_count = 0;
+int label_count = 0;
 
-// 符号表结构
+// 符号表结构（增强版）
 typedef struct {
     char name[64];
     enum Category_symbol kind;
+    enum DataType type;      // 新增：数据类型
     int address;
+    int initialized;         // 新增：是否已初始化
 } SymbolEntry;
 
 SymbolEntry symbol[maxsymbolIndex];
@@ -36,6 +71,11 @@ int scope_level = 0;
 char *astText = NULL;
 size_t astCap = 0;
 int indentLevel = 0;
+
+// Token相关变量
+char token[64], token1[256];
+char tokenfile[260];
+FILE *fpTokenin;
 
 // ===================== AST函数 =====================
 void ast_init() {
@@ -106,12 +146,12 @@ void gen_code(const char *opt, int operand) {
     codesIndex++;
 }
 
-// 生成临时变量
+// 生成临时变量（返回临时变量编号）
 int new_temp() {
     return temp_var_count++;
 }
 
-// 生成标签
+// 生成标签（返回标签编号）
 int new_label() {
     return label_count++;
 }
@@ -126,25 +166,72 @@ void print_intermediate_code() {
     }
 }
 
+// ===================== 语义分析函数 =====================
+
+// 类型兼容性检查
+int check_type_compatible(enum DataType t1, enum DataType t2) {
+    // 简单实现：只允许相同类型
+    if (t1 == t2) return 1;
+
+    // 允许int到float/double的隐式转换
+    if (t1 == TYPE_INT && (t2 == TYPE_FLOAT || t2 == TYPE_DOUBLE)) {
+        return 1;
+    }
+    if (t2 == TYPE_INT && (t1 == TYPE_FLOAT || t1 == TYPE_DOUBLE)) {
+        return 1;
+    }
+
+    return 0;
+}
+
+// 检查变量是否已初始化
+int check_variable_initialized(char *name) {
+    int pos;
+    if (lookup(name, &pos) == 0 && symbol[pos].kind == variable) {
+        return symbol[pos].initialized;
+    }
+    return 1; // 如果不是变量或没找到，返回1（避免误报）
+}
+
+// 标记变量已初始化
+void mark_variable_initialized(char *name) {
+    int pos;
+    if (lookup(name, &pos) == 0 && symbol[pos].kind == variable) {
+        symbol[pos].initialized = 1;
+    }
+}
+
+// 获取变量的类型
+enum DataType get_variable_type(char *name) {
+    int pos;
+    if (lookup(name, &pos) == 0) {
+        return symbol[pos].type;
+    }
+    return TYPE_UNKNOWN;
+}
+
 // ===================== 符号表函数 =====================
-int insert_Symbol(enum Category_symbol category, char *name) {
+
+// 插入符号到符号表（增强版）
+int insert_Symbol(enum Category_symbol category, char *name, enum DataType type) {
     int i, es = 0;
 
     if (symbolIndex >= maxsymbolIndex) return (21);
 
+    // 检查重复定义（在当前作用域）
     for (i = symbolIndex - 1; i >= 0; i--) {
         if (strcmp(symbol[i].name, name) == 0) {
             if (symbol[i].kind == category) {
                 if (category == function) {
-                    es = 32;
+                    es = 32; // 函数名重复定义
                 } else {
-                    es = 22;
+                    es = 22; // 变量名重复定义
                 }
             } else {
                 if (category == function) {
-                    es = 32;
+                    es = 32; // 函数名与变量名冲突
                 } else {
-                    es = 22;
+                    es = 22; // 变量名与函数名冲突
                 }
             }
             break;
@@ -153,12 +240,17 @@ int insert_Symbol(enum Category_symbol category, char *name) {
 
     if (es > 0) return (es);
 
+    // 插入新符号
     switch (category) {
         case function:
             symbol[symbolIndex].kind = function;
+            symbol[symbolIndex].type = type;
+            symbol[symbolIndex].initialized = 1; // 函数视为已初始化
             break;
         case variable:
             symbol[symbolIndex].kind = variable;
+            symbol[symbolIndex].type = type;
+            symbol[symbolIndex].initialized = 0; // 变量初始时未初始化
             symbol[symbolIndex].address = offset;
             offset++;
             break;
@@ -170,6 +262,7 @@ int insert_Symbol(enum Category_symbol category, char *name) {
     return es;
 }
 
+// 查找符号
 int lookup(char *name, int *pPosition) {
     int i;
     for (i = symbolIndex - 1; i >= 0; i--) {
@@ -182,9 +275,6 @@ int lookup(char *name, int *pPosition) {
 }
 
 // ===================== Token读取函数 =====================
-char token[64], token1[256];
-char tokenfile[260];
-FILE *fpTokenin;
 
 int read_next_token() {
     char line[512];
@@ -221,96 +311,58 @@ int read_next_token() {
     return 1;
 }
 
-// ===================== 函数声明 =====================
-int TESTparse();
-int program();
-int main_declaration();
-int function_body();
-int statement();
-int expression_stat();
-int expression();
-int bool_expr();
-int additive_expr();
-int term();
-int factor();
-int if_stat();
-int while_stat();
-int for_stat();
-int write_stat();
-int read_stat();
-int declaration_stat();
-int declaration_list();
-int statement_list();
-int compound_stat();
-int call_stat();
 
 // ===================== 主测试函数 =====================
 int TESTparse() {
-    int i;
     int es = 0;
     printf("请输入单词流文件名（包括路径）：");
     if (scanf("%s", tokenfile) != 1) return 10;
     if ((fpTokenin = fopen(tokenfile, "r")) == NULL) {
         printf("\n打开%s错误!\n", tokenfile);
-        es = 10;
-        return (es);
+        return 10;
     }
 
     ast_init();
     codesIndex = 0;
     temp_var_count = 0;
     label_count = 0;
+    symbolIndex = 0;
 
     if (!read_next_token()) {
         printf("错误: 文件为空\n");
+        fclose(fpTokenin);
         return 10;
     }
 
     es = program();
     fclose(fpTokenin);
 
-    printf("==语法分析程序结果==\n");
-    switch (es) {
-        case 0: printf("语法分析成功!\n");
-            break;
-        case 10: printf("读取文件 %s失败!\n", tokenfile);
-            break;
-        case 1: printf("缺少{!\n");
-            break;
-        case 2: printf("缺少}!\n");
-            break;
-        case 3: printf("缺少标识符!\n");
-            break;
-        case 4: printf("少分号!\n");
-            break;
-        case 5: printf("缺少(!\n");
-            break;
-        case 6: printf("缺少)!\n");
-            break;
-        case 7: printf("缺少操作数!\n");
-            break;
-        case 8: printf("缺少参数类型!\n");
-            break;
-        case 9: printf("赋值语句的左值不是变量名!\n");
-            break;
-        case 11: printf("函数开头缺少{!\n");
-            break;
-        case 12: printf("函数结束缺少}!\n");
-            break;
-        case 13: printf("缺少main函数!\n");
-            break;
-        case 21: printf("符号表已满!\n");
-            break;
-        case 22: printf("变量%s重复定义!\n", token1);
-            break;
-        case 23: printf("变量未声明!\n");
-            break;
-        case 32: printf("函数名重复定义!\n");
-            break;
-        case 35: printf("不是变量名!\n");
-            break;
-        default: if (es > 0) printf("错误码: %d\n", es);
-            break;
+    // 输出结果
+    printf("\n==语法分析程序结果==\n");
+    if (es == 0) {
+        printf("语法分析成功!\n");
+    } else {
+        // 错误码映射
+        const char* error_messages[] = {
+            "成功",
+            "缺少{!", "缺少}!", "缺少标识符!", "少分号!", "缺少(!", "缺少)!",
+            "缺少操作数!", "缺少参数类型!", "赋值语句的左值不是变量名!",
+            "读取文件失败!", "函数开头缺少{!", "函数结束缺少}!", "缺少main函数!",
+            "", "", "", "", "", "",
+            "符号表已满!", "变量重复定义!", "变量未声明!",
+            "", "", "", "", "", "", "",
+            "函数名重复定义!", "", "", "", "不是变量名!"
+        };
+
+        if (es >= 0 && es < sizeof(error_messages)/sizeof(error_messages[0])) {
+            if (error_messages[es][0] != '\0') {
+                printf("错误[%d]: %s\n", es, error_messages[es]);
+            } else {
+                printf("错误码: %d\n", es);
+            }
+        } else {
+            printf("未知错误码: %d\n", es);
+        }
     }
 
     // 输出中间代码
@@ -331,6 +383,7 @@ int TESTparse() {
         printf("中间代码已输出到 %s\n", codefile);
     }
 
+    // 输出AST
     char astfile[512];
     snprintf(astfile, sizeof(astfile), "%s.ast.txt", tokenfile);
     FILE *fasta = fopen(astfile, "w");
@@ -346,6 +399,8 @@ int TESTparse() {
     return (es);
 }
 
+// ===================== 语法分析函数实现 =====================
+
 // <program> → main_declaration
 int program() {
     int es = 0;
@@ -358,7 +413,14 @@ int program() {
     }
 
     ast_begin("main_declaration");
-    insert_Symbol(function, "main");
+
+    // 插入main函数，返回类型为int
+    es = insert_Symbol(function, "main", TYPE_INT);
+    if (es > 0) {
+        ast_end();
+        ast_end();
+        return es;
+    }
 
     // 生成函数入口代码
     gen_code("ENTRY", 0);
@@ -415,7 +477,7 @@ int function_body() {
         return (es);
     }
 
-    offset = 2;
+    offset = 2;  // 重置局部变量地址
 
     if (!read_next_token()) return 10;
     es = declaration_list();
@@ -461,12 +523,13 @@ int declaration_stat() {
         return (es = 3);
     }
 
+    char var_name[256];
+    strncpy(var_name, token1, sizeof(var_name) - 1);
+    var_name[sizeof(var_name) - 1] = '\0';
+
     ast_begin("id");
     ast_add_attr("type", "Identifier");
     ast_add_attr("name", token1);
-
-    es = insert_Symbol(variable, token1);
-    if (es > 0) return (es);
 
     if (!read_next_token()) return 10;
     if (strcmp(token, ":") != 0 && strcmp(token1, ":") != 0) {
@@ -475,30 +538,39 @@ int declaration_stat() {
     }
 
     if (!read_next_token()) return 10;
+
+    // 确定变量类型
+    enum DataType var_type = TYPE_UNKNOWN;
     if (strcmp(token, "int") == 0 || strcmp(token1, "int") == 0) {
+        var_type = TYPE_INT;
         ast_add_attr("kind", "int");
     } else if (strcmp(token, "double") == 0 || strcmp(token1, "double") == 0) {
+        var_type = TYPE_DOUBLE;
         ast_add_attr("kind", "double");
     } else if (strcmp(token, "float") == 0 || strcmp(token1, "float") == 0) {
+        var_type = TYPE_FLOAT;
         ast_add_attr("kind", "float");
     } else if (strcmp(token, "char") == 0 || strcmp(token1, "char") == 0) {
+        var_type = TYPE_CHAR;
         ast_add_attr("kind", "char");
-    } else if (strcmp(token, "ID") == 0 && strcmp(token1, "ID") == 0) {
-        ast_add_attr("kind", token1);
     } else {
         printf("期望类型，得到: %s %s\n", token, token1);
         return (es = 8);
     }
 
+    // 插入符号表，记录类型
+    es = insert_Symbol(variable, var_name, var_type);
+    if (es > 0) return (es);
+
     // 生成变量声明代码
     gen_code("DECL", symbolIndex - 1);  // operand存储符号表索引
 
-    ast_end();
+    ast_end(); // id
     if (!read_next_token()) return 10;
 
-    ast_end();
-    ast_end();
-    ast_end();
+    ast_end(); // VariableDeclarator
+    ast_end(); // declarations
+    ast_end(); // VariableDeclaration
     return (es);
 }
 
@@ -507,7 +579,8 @@ int statement_list() {
     int es = 0;
     ast_begin("StatementList");
 
-    while ((strcmp(token, "}") != 0 && strcmp(token1, "}") != 0) && (token[0] != '\0' && !feof(fpTokenin))) {
+    while ((strcmp(token, "}") != 0 && strcmp(token1, "}") != 0) &&
+           (token[0] != '\0' && !feof(fpTokenin))) {
         printf("解析语句，当前token: %s %s\n", token, token1);
         es = statement();
         if (es > 0) return es;
@@ -665,7 +738,7 @@ int while_stat() {
 
 // <for_stat>→ for '(' <expr> ; <expr> ; <expr> ')' <statement>
 int for_stat() {
-    int es = 0, cx1, cx2, cx3;
+    int es = 0, cx1, cx2;
 
     if (!read_next_token()) return 10;
     if (strcmp(token, "(") != 0 && strcmp(token1, "(") != 0) {
@@ -845,6 +918,9 @@ int read_stat() {
     codes[codesIndex].operand = pos;
     codesIndex++;
 
+    // 语义：read后变量已初始化
+    mark_variable_initialized(token1);
+
     if (!read_next_token()) return 10;
     return es;
 }
@@ -869,6 +945,11 @@ int write_stat() {
     if (symbol[pos].kind != variable) {
         printf("%s不是变量名\n", token1);
         return 35;
+    }
+
+    // 语义检查：写入前检查变量是否初始化
+    if (!check_variable_initialized(token1)) {
+        printf("警告: 变量 %s 可能未初始化\n", token1);
     }
 
     // 生成写出代码
@@ -930,6 +1011,7 @@ int expression() {
         }
 
         if (strcmp(token, "=") == 0 || strcmp(token1, "=") == 0) {
+            // 赋值语句
             ast_begin("LeftValue");
             ast_add_attr("variable", var_name);
             ast_end();
@@ -945,14 +1027,24 @@ int expression() {
             es = bool_expr();
             ast_end();
 
+            // 语义：赋值后标记变量已初始化
+            mark_variable_initialized(var_name);
+
             // 生成赋值代码
             strcpy(codes[codesIndex].opt, "STO");
             codes[codesIndex].operand = pos;
             codesIndex++;
+
         } else if (strcmp(token, "++") == 0 || strcmp(token1, "++") == 0 ||
                    strcmp(token, "--") == 0 || strcmp(token1, "--") == 0) {
+            // 自增自减
             ast_add_attr("operator", token);
             ast_add_attr("position", "postfix");
+
+            // 语义检查：使用前检查是否初始化
+            if (!check_variable_initialized(var_name)) {
+                printf("警告: 变量 %s 可能未初始化\n", var_name);
+            }
 
             // 生成自增自减代码
             if (strcmp(token, "++") == 0) {
@@ -963,6 +1055,9 @@ int expression() {
             codes[codesIndex].operand = pos;
             codesIndex++;
 
+            // 自增自减后变量已初始化
+            mark_variable_initialized(var_name);
+
             if (!read_next_token()) {
                 ast_end();
                 return 10;
@@ -970,12 +1065,25 @@ int expression() {
             ast_end();
             return 0;
         } else {
+            // 读取变量值
             strcpy(token, current_token);
             strcpy(token1, current_token1);
+
+            // 语义检查：使用前检查是否初始化
+            if (!check_variable_initialized(var_name)) {
+                printf("警告: 变量 %s 可能未初始化\n", var_name);
+            }
+
+            // 生成加载变量代码
+            strcpy(codes[codesIndex].opt, "LOAD");
+            codes[codesIndex].operand = pos;
+            codesIndex++;
+
             es = bool_expr();
         }
     } else if (strcmp(token, "++") == 0 || strcmp(token1, "++") == 0 ||
                strcmp(token, "--") == 0 || strcmp(token1, "--") == 0) {
+        // 前置自增自减
         char op[4];
         strncpy(op, token, sizeof(op) - 1);
         op[sizeof(op) - 1] = '\0';
@@ -1000,9 +1108,10 @@ int expression() {
             return 23;
         }
 
-        ast_begin("Operand");
-        ast_add_attr("variable", token1);
-        ast_end();
+        // 语义检查：使用前检查是否初始化
+        if (!check_variable_initialized(token1)) {
+            printf("警告: 变量 %s 可能未初始化\n", token1);
+        }
 
         // 生成前置自增自减代码
         if (op[0] == '+') {
@@ -1013,6 +1122,13 @@ int expression() {
         codes[codesIndex].operand = pos;
         codesIndex++;
 
+        // 自增自减后变量已初始化
+        mark_variable_initialized(token1);
+
+        ast_begin("Operand");
+        ast_add_attr("variable", token1);
+        ast_end();
+
         if (!read_next_token()) {
             ast_end();
             return 10;
@@ -1020,6 +1136,7 @@ int expression() {
         ast_end();
         return 0;
     } else {
+        // 普通表达式
         es = bool_expr();
     }
 
@@ -1178,10 +1295,18 @@ int factor() {
 
         int pos;
         if (lookup(token1, &pos) == 0) {
+            // 语义检查：使用前检查是否初始化
+            if (!check_variable_initialized(token1)) {
+                printf("警告: 变量 %s 可能未初始化\n", token1);
+            }
+
             // 生成加载变量代码
             strcpy(codes[codesIndex].opt, "LOAD");
             codes[codesIndex].operand = pos;
             codesIndex++;
+        } else {
+            printf("变量%s未声明\n", token1);
+            return 23;
         }
 
         if (!read_next_token()) return 10;
