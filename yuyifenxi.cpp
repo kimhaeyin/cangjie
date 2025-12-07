@@ -368,10 +368,171 @@ void gen_code(const char *opt, int operand) {
         report_error(99, "中间代码表已满");
         return;
     }
-    strcpy(codes[codesIndex].opt, opt);
+
+    // 修正操作码（根据你的指令集）
+    if (strcmp(opt, "LIT") == 0) {
+        strcpy(codes[codesIndex].opt, "LOADI");
+    } else if (strcmp(opt, "LIT_BOOL") == 0) {
+        strcpy(codes[codesIndex].opt, "LOADI");
+    } else if (strcmp(opt, "INC") == 0) {
+        // 自增操作需要多条指令
+        // x++ 相当于: LOAD x; LOADI 1; ADD; STO x
+        strcpy(codes[codesIndex].opt, "LOAD");  // 先加载变量
+        codes[codesIndex].operand = operand;
+        codesIndex++;
+
+        if (codesIndex >= MAX_CODES) {
+            report_error(99, "中间代码表已满");
+            return;
+        }
+        strcpy(codes[codesIndex].opt, "LOADI");  // 加载常量1
+        codes[codesIndex].operand = 1;
+        codesIndex++;
+
+        if (codesIndex >= MAX_CODES) {
+            report_error(99, "中间代码表已满");
+            return;
+        }
+        strcpy(codes[codesIndex].opt, "ADD");  // 相加
+        codes[codesIndex].operand = 0;
+        codesIndex++;
+
+        if (codesIndex >= MAX_CODES) {
+            report_error(99, "中间代码表已满");
+            return;
+        }
+        strcpy(codes[codesIndex].opt, "STO");  // 存回
+        codes[codesIndex].operand = operand;
+        // 这次不用codesIndex++，因为外层函数会加
+    } else if (strcmp(opt, "DEC") == 0) {
+        // x-- 相当于: LOAD x; LOADI 1; SUB; STO x
+        strcpy(codes[codesIndex].opt, "LOAD");
+        codes[codesIndex].operand = operand;
+        codesIndex++;
+
+        if (codesIndex >= MAX_CODES) {
+            report_error(99, "中间代码表已满");
+            return;
+        }
+        strcpy(codes[codesIndex].opt, "LOADI");
+        codes[codesIndex].operand = 1;
+        codesIndex++;
+
+        if (codesIndex >= MAX_CODES) {
+            report_error(99, "中间代码表已满");
+            return;
+        }
+        strcpy(codes[codesIndex].opt, "SUB");
+        codes[codesIndex].operand = 0;
+        codesIndex++;
+
+        if (codesIndex >= MAX_CODES) {
+            report_error(99, "中间代码表已满");
+            return;
+        }
+        strcpy(codes[codesIndex].opt, "STO");
+        codes[codesIndex].operand = operand;
+    } else if (strcmp(opt, "PRE_INC") == 0 || strcmp(opt, "PRE_DEC") == 0) {
+        // 前置自增/自减与后置类似，但使用顺序不同
+        if (strcmp(opt, "PRE_INC") == 0) {
+            strcpy(codes[codesIndex].opt, "LOAD");
+            codes[codesIndex].operand = operand;
+            codesIndex++;
+
+            if (codesIndex >= MAX_CODES) {
+                report_error(99, "中间代码表已满");
+                return;
+            }
+            strcpy(codes[codesIndex].opt, "LOADI");
+            codes[codesIndex].operand = 1;
+            codesIndex++;
+
+            if (codesIndex >= MAX_CODES) {
+                report_error(99, "中间代码表已满");
+                return;
+            }
+            strcpy(codes[codesIndex].opt, "ADD");
+            codes[codesIndex].operand = 0;
+            codesIndex++;
+
+            if (codesIndex >= MAX_CODES) {
+                report_error(99, "中间代码表已满");
+                return;
+            }
+            strcpy(codes[codesIndex].opt, "LOAD");  // 再加载一次用于表达式
+            codes[codesIndex].operand = operand;
+            codesIndex++;
+
+            if (codesIndex >= MAX_CODES) {
+                report_error(99, "中间代码表已满");
+                return;
+            }
+            strcpy(codes[codesIndex].opt, "STO");
+        } else {
+            strcpy(codes[codesIndex].opt, "LOAD");
+            codes[codesIndex].operand = operand;
+            codesIndex++;
+
+            if (codesIndex >= MAX_CODES) {
+                report_error(99, "中间代码表已满");
+                return;
+            }
+            strcpy(codes[codesIndex].opt, "LOADI");
+            codes[codesIndex].operand = 1;
+            codesIndex++;
+
+            if (codesIndex >= MAX_CODES) {
+                report_error(99, "中间代码表已满");
+                return;
+            }
+            strcpy(codes[codesIndex].opt, "SUB");
+            codes[codesIndex].operand = 0;
+            codesIndex++;
+
+            if (codesIndex >= MAX_CODES) {
+                report_error(99, "中间代码表已满");
+                return;
+            }
+            strcpy(codes[codesIndex].opt, "LOAD");
+            codes[codesIndex].operand = operand;
+            codesIndex++;
+
+            if (codesIndex >= MAX_CODES) {
+                report_error(99, "中间代码表已满");
+                return;
+            }
+            strcpy(codes[codesIndex].opt, "STO");
+        }
+    } else if (strcmp(opt, "MUL") == 0) {
+        strcpy(codes[codesIndex].opt, "MULT");
+    } else if (strcmp(opt, "DIV") == 0) {
+        strcpy(codes[codesIndex].opt, "DIV");
+    } else if (strcmp(opt, "GT") == 0) {
+        strcpy(codes[codesIndex].opt, "GT");
+    } else if (strcmp(opt, "GE") == 0) {
+        strcpy(codes[codesIndex].opt, "GE");
+    } else if (strcmp(opt, "LT") == 0) {
+        strcpy(codes[codesIndex].opt, "LES");
+    } else if (strcmp(opt, "LE") == 0) {
+        strcpy(codes[codesIndex].opt, "LE");
+    } else if (strcmp(opt, "EQ") == 0) {
+        strcpy(codes[codesIndex].opt, "EQ");
+    } else if (strcmp(opt, "NE") == 0) {
+        strcpy(codes[codesIndex].opt, "NOTEQ");
+    } else if (strcmp(opt, "AND") == 0) {
+        strcpy(codes[codesIndex].opt, "AND");
+    } else if (strcmp(opt, "OR") == 0) {
+        strcpy(codes[codesIndex].opt, "OR");
+    } else if (strcmp(opt, "NOT") == 0) {
+        strcpy(codes[codesIndex].opt, "NOT");
+    } else {
+        // 其他操作码保持不变
+        strcpy(codes[codesIndex].opt, opt);
+    }
+
     codes[codesIndex].operand = operand;
 
-    printf("生成代码[%d]: %s %d\n", codesIndex, opt, operand);
+    printf("生成代码[%d]: %s %d\n", codesIndex, codes[codesIndex].opt, codes[codesIndex].operand);
     codesIndex++;
 }
 
@@ -739,129 +900,7 @@ int TESTparse() {
 
 // ===================== 语法分析函数实现 =====================
 
-int program() {
-    int es = 0;
-    ast_begin("Program");
-
-    if (strcmp(token, "main") != 0 && strcmp(token1, "main") != 0) {
-        report_error(13, "缺少main函数，得到: %s %s", token, token1);
-        es = 13;
-        skip_to_sync_point();
-        ast_end();
-        return es;
-    }
-
-    ast_begin("main_declaration");
-
-    es = insert_Symbol(function, "main", TYPE_INT, 0, 0, NULL, 0);
-    if (es > 0) {
-        ast_end();
-        ast_end();
-        return es;
-    }
-
-    if (!has_fatal_error) {
-        gen_code("ENTRY", 0);
-    }
-
-    if (!read_next_token()) return 10;
-    es = main_declaration();
-    if (es > 0) {
-        ast_end();
-        ast_end();
-        return es;
-    }
-
-    if (!has_fatal_error) {
-        gen_code("RET", 0);
-    }
-
-    ast_end();
-    ast_end();
-    return es;
-}
-
-int main_declaration() {
-    int es = 0;
-    ast_add_attr("ID", "main");
-
-    if (strcmp(token, "(") != 0 && strcmp(token1, "(") != 0) {
-        report_error(5, "期望(，得到: %s %s", token, token1);
-        es = 5;
-        skip_to_sync_point();
-        return es;
-    }
-
-    if (!read_next_token()) return 10;
-    if (strcmp(token, ")") != 0 && strcmp(token1, ")") != 0) {
-        report_error(6, "期望)，得到: %s %s", token, token1);
-        es = 6;
-        skip_to_sync_point();
-        return es;
-    }
-
-    if (!read_next_token()) return 10;
-
-    // 进入函数作用域
-    enter_scope("function");
-    es = function_body();
-    exit_scope();
-
-    return es;
-}
-
-int function_body() {
-    int es = 0;
-    ast_begin("Function_Body");
-
-    if (strcmp(token, "{") != 0 && strcmp(token1, "{") != 0) {
-        report_error(11, "期望{，得到: %s %s", token, token1);
-        es = 11;
-        skip_to_sync_point();
-        ast_end();
-        return es;
-    }
-
-    offset = 2;
-
-    if (!read_next_token()) return 10;
-    es = declaration_list();
-    if (es > 0 && has_fatal_error) {
-        ast_end();
-        return es;
-    }
-
-    es = statement_list();
-    if (es > 0 && has_fatal_error) {
-        ast_end();
-        return es;
-    }
-
-    if (strcmp(token, "}") != 0 && strcmp(token1, "}") != 0) {
-        report_error(12, "期望}，得到: %s %s", token, token1);
-        es = 12;
-        skip_to_sync_point();
-    }
-
-    ast_end();
-    return 0;
-}
-
-int declaration_list() {
-    int es = 0;
-    ast_begin("DeclarationList");
-
-    while (strcmp(token, "var") == 0 || strcmp(token1, "var") == 0) {
-        es = declaration_stat();
-        if (es > 0 && has_fatal_error) {
-            ast_end();
-            return es;
-        }
-    }
-
-    ast_end();
-    return es;
-}
+// 修改declaration_stat函数中的代码生成：
 
 int declaration_stat() {
     int es = 0;
@@ -919,22 +958,14 @@ int declaration_stat() {
         var_type = TYPE_BOOL;
         ast_add_attr("kind", "bool");
     } else {
-        // 检查是否为数组声明
-        if (strcmp(token, "array") == 0 || strcmp(token1, "array") == 0) {
-            // 这里可以扩展支持数组声明
-            report_error(62, "数组声明暂不支持");
-            var_type = TYPE_ARRAY;
-            ast_add_attr("kind", "array");
-        } else {
-            report_error(8, "期望类型关键字，得到: %s %s", token, token1);
-            es = 8;
-            skip_to_sync_point();
-            ast_end();
-            ast_end();
-            ast_end();
-            ast_end();
-            return es;
-        }
+        report_error(8, "期望类型关键字，得到: %s %s", token, token1);
+        es = 8;
+        skip_to_sync_point();
+        ast_end();
+        ast_end();
+        ast_end();
+        ast_end();
+        return es;
     }
 
     es = insert_Symbol(variable, var_name, var_type, 0, 0, NULL, 0);
@@ -946,8 +977,12 @@ int declaration_stat() {
         return es;
     }
 
+    // DECL指令改为分配存储空间
     if (!has_fatal_error) {
-        gen_code("DECL", symbolIndex - 1);
+        // 在栈中分配空间
+        strcpy(codes[codesIndex].opt, "ALLOC");
+        codes[codesIndex].operand = 1;  // 分配1个单元
+        codesIndex++;
     }
 
     ast_end();
@@ -958,6 +993,141 @@ int declaration_stat() {
     ast_end();
     return es;
 }
+
+// 修改main_declaration函数：
+
+int main_declaration() {
+    int es = 0;
+    ast_add_attr("ID", "main");
+
+    if (strcmp(token, "(") != 0 && strcmp(token1, "(") != 0) {
+        report_error(5, "期望(，得到: %s %s", token, token1);
+        es = 5;
+        skip_to_sync_point();
+        return es;
+    }
+
+    if (!read_next_token()) return 10;
+    if (strcmp(token, ")") != 0 && strcmp(token1, ")") != 0) {
+        report_error(6, "期望)，得到: %s %s", token, token1);
+        es = 6;
+        skip_to_sync_point();
+        return es;
+    }
+
+    if (!read_next_token()) return 10;
+
+    // 进入函数作用域
+    enter_scope("function");
+
+    // 生成函数入口代码
+    if (!has_fatal_error) {
+        gen_code("ENTER", 0);  // 为函数调用开辟数据区
+    }
+
+    es = function_body();
+    exit_scope();
+
+    return es;
+}
+
+// 修改program函数中的代码生成：
+
+int program() {
+    int es = 0;
+    ast_begin("Program");
+
+    if (strcmp(token, "main") != 0 && strcmp(token1, "main") != 0) {
+        report_error(13, "缺少main函数，得到: %s %s", token, token1);
+        es = 13;
+        skip_to_sync_point();
+        ast_end();
+        return es;
+    }
+
+    ast_begin("main_declaration");
+
+    es = insert_Symbol(function, "main", TYPE_INT, 0, 0, NULL, 0);
+    if (es > 0) {
+        ast_end();
+        ast_end();
+        return es;
+    }
+
+    // 不需要生成ENTRY指令，因为你的指令集没有ENTRY
+
+    if (!read_next_token()) return 10;
+    es = main_declaration();
+    if (es > 0) {
+        ast_end();
+        ast_end();
+        return es;
+    }
+
+    // 生成停止指令
+    if (!has_fatal_error) {
+        gen_code("STOP", 0);
+    }
+
+    ast_end();
+    ast_end();
+    return es;
+}
+
+int function_body() {
+    int es = 0;
+    ast_begin("Function_Body");
+
+    if (strcmp(token, "{") != 0 && strcmp(token1, "{") != 0) {
+        report_error(11, "期望{，得到: %s %s", token, token1);
+        es = 11;
+        skip_to_sync_point();
+        ast_end();
+        return es;
+    }
+
+    offset = 2;
+
+    if (!read_next_token()) return 10;
+    es = declaration_list();
+    if (es > 0 && has_fatal_error) {
+        ast_end();
+        return es;
+    }
+
+    es = statement_list();
+    if (es > 0 && has_fatal_error) {
+        ast_end();
+        return es;
+    }
+
+    if (strcmp(token, "}") != 0 && strcmp(token1, "}") != 0) {
+        report_error(12, "期望}，得到: %s %s", token, token1);
+        es = 12;
+        skip_to_sync_point();
+    }
+
+    ast_end();
+    return 0;
+}
+
+int declaration_list() {
+    int es = 0;
+    ast_begin("DeclarationList");
+
+    while (strcmp(token, "var") == 0 || strcmp(token1, "var") == 0) {
+        es = declaration_stat();
+        if (es > 0 && has_fatal_error) {
+            ast_end();
+            return es;
+        }
+    }
+
+    ast_end();
+    return es;
+}
+
+
 
 int statement_list() {
     int es = 0;
@@ -1121,55 +1291,63 @@ int statement() {
 }
 
 int if_stat() {
-    int es = 0, cx1, cx2;
+        int es = 0, cx1, cx2;
 
-    if (!read_next_token()) return 10;
-    if (strcmp(token, "(") != 0 && strcmp(token1, "(") != 0) {
-        report_error(5, "期望(，得到: %s %s", token, token1);
-        es = 5;
-        skip_to_sync_point();
-        return es;
-    }
+        if (!read_next_token()) return 10;
+        if (strcmp(token, "(") != 0 && strcmp(token1, "(") != 0) {
+            report_error(5, "期望(，得到: %s %s", token, token1);
+            es = 5;
+            skip_to_sync_point();
+            return es;
+        }
 
-    if (!read_next_token()) return 10;
-    es = bool_expr();
-    if (es > 0) return es;
+        if (!read_next_token()) return 10;
+        es = bool_expr();
+        if (es > 0) return es;
 
-    if (!has_fatal_error) {
-        strcpy(codes[codesIndex].opt, "BRF");
-        cx1 = codesIndex++;
-    }
+        if (!has_fatal_error) {
+            strcpy(codes[codesIndex].opt, "BRF");
+            cx1 = codesIndex++;
+        }
 
-    if (strcmp(token, ")") != 0 && strcmp(token1, ")") != 0) {
-        report_error(6, "期望)，得到: %s %s", token, token1);
-        es = 6;
-        skip_to_sync_point();
-        return es;
-    }
+        if (strcmp(token, ")") != 0 && strcmp(token1, ")") != 0) {
+            report_error(6, "期望)，得到: %s %s", token, token1);
+            es = 6;
+            skip_to_sync_point();
+            return es;
+        }
 
-    if (!read_next_token()) return 10;
-    es = statement();
-    if (es > 0) return es;
-
-    if (!has_fatal_error) {
-        strcpy(codes[codesIndex].opt, "BR");
-        cx2 = codesIndex++;
-        codes[cx1].operand = codesIndex;
-    }
-
-    if (strcmp(token, "else") == 0 || strcmp(token1, "else") == 0) {
-        ast_add_attr("has_else", "true");
         if (!read_next_token()) return 10;
         es = statement();
         if (es > 0) return es;
-    } else {
-        ast_add_attr("has_else", "false");
-    }
 
-    if (!has_fatal_error) {
-        codes[cx2].operand = codesIndex;
-    }
-    return es;
+        if (!has_fatal_error) {
+            strcpy(codes[codesIndex].opt, "BR");
+            cx2 = codesIndex++;
+            codes[cx1].operand = codesIndex;  // 指向else语句开始或if结束
+        }
+
+        if (strcmp(token, "else") == 0 || strcmp(token1, "else") == 0) {
+            ast_add_attr("has_else", "true");
+            if (!read_next_token()) return 10;
+            es = statement();
+            if (es > 0) return es;
+
+            if (!has_fatal_error) {
+                codes[cx2].operand = codesIndex;  // 指向if语句结束
+            }
+        } else {
+            ast_add_attr("has_else", "false");
+            if (!has_fatal_error) {
+                codes[cx1].operand = codesIndex;  // 条件为假时直接跳到这里
+            }
+        }
+
+        if (!has_fatal_error) {
+            codes[cx2].operand = codesIndex;  // BR指令跳转到这里
+        }
+        return es;
+
 }
 
 int while_stat() {
@@ -1447,9 +1625,6 @@ int write_stat() {
             return 35;
         }
 
-        if (!check_variable_initialized(token1)) {
-            report_warning("变量 %s 可能未初始化", token1);
-        }
 
         enum DataType var_type = get_variable_type(token1);
         if (var_type == TYPE_ARRAY) {
@@ -1541,32 +1716,65 @@ int expression() {
                 return 10;
             }
 
-            // 保存右值开始的token
+            // 保存右值开始的token用于类型检查
             char saved_token[64], saved_token1[256];
             strcpy(saved_token, token);
             strcpy(saved_token1, token1);
+
+            // 检查右值是否是立即数（NUM或STRING）
+            int is_right_num = (strcmp(saved_token, "NUM") == 0 || strcmp(saved_token1, "NUM") == 0);
+            int is_right_string = is_string_literal(saved_token1);
+            int is_right_bool = (strcmp(saved_token, "true") == 0 || strcmp(saved_token1, "true") == 0 ||
+                                strcmp(saved_token, "false") == 0 || strcmp(saved_token1, "false") == 0);
 
             ast_begin("RightValue");
             es = bool_expr();
             ast_end();
 
-            // 类型检查（只在变量已声明且是变量类型时）
+            // 详细的类型检查（只在变量已声明且是变量类型时）
             if (lookup_result == 0 && symbol[pos].kind == variable) {
-                if (strcmp(saved_token, "NUM") == 0 || strcmp(saved_token1, "NUM") == 0) {
-                    // 检查数值类型
-                    if (is_float_string(saved_token1) && left_type == TYPE_INT) {
-                        report_error(51, "不能将浮点数 %s 赋值给整型变量 %s", saved_token1, var_name);
-                    } else if (left_type == TYPE_BOOL) {
-                        report_error(51, "不能将数值 %s 赋值给布尔变量 %s", saved_token1, var_name);
+                if (is_right_num) {
+                    // 数值类型赋值检查
+                    if (is_float_string(saved_token1)) {
+                        if (left_type == TYPE_INT) {
+                            report_error(51, "不能将浮点数 %s 赋值给整型变量 %s",
+                                        saved_token1, var_name);
+                        } else if (left_type == TYPE_BOOL) {
+                            report_error(51, "不能将数值 %s 赋值给布尔变量 %s",
+                                        saved_token1, var_name);
+                        } else if (left_type == TYPE_STRING) {
+                            report_error(51, "不能将数值 %s 赋值给字符串变量 %s",
+                                        saved_token1, var_name);
+                        }
+                        // 浮点数赋值给浮点类型是允许的
+                    } else {
+                        // 整数常量赋值
+                        if (left_type == TYPE_BOOL) {
+                            report_error(51, "不能将整数 %s 赋值给布尔变量 %s",
+                                        saved_token1, var_name);
+                        } else if (left_type == TYPE_STRING) {
+                            report_error(51, "不能将整数 %s 赋值给字符串变量 %s",
+                                        saved_token1, var_name);
+                        }
                     }
-                } else if (is_string_literal(saved_token1) && left_type != TYPE_STRING) {
-                    report_error(51, "不能将字符串赋值给非字符串变量 %s", var_name);
+                } else if (is_right_string) {
+                    // 字符串赋值检查
+                    if (left_type != TYPE_STRING) {
+                        report_error(51, "不能将字符串赋值给非字符串变量 %s", var_name);
+                    }
+                } else if (is_right_bool) {
+                    // 布尔值赋值检查
+                    if (left_type != TYPE_BOOL) {
+                        report_error(51, "不能将布尔值赋值给非布尔变量 %s", var_name);
+                    }
                 }
+                // 其他情况（如变量赋值、表达式结果赋值）会在bool_expr中进行类型检查
 
                 // 检查数组类型
                 if (left_type == TYPE_ARRAY) {
                     report_error(64, "不能直接给数组 %s 赋值", var_name);
                 }
+
 
                 // 标记变量已初始化
                 mark_variable_initialized(var_name);
@@ -1574,6 +1782,7 @@ int expression() {
 
             // 生成代码（只在没有致命错误且变量已声明时）
             if (!has_fatal_error && lookup_result == 0 && symbol[pos].kind == variable) {
+                // STO指令：将栈顶值存储到变量
                 strcpy(codes[codesIndex].opt, "STO");
                 codes[codesIndex].operand = pos;
                 codesIndex++;
@@ -1582,7 +1791,11 @@ int expression() {
         } else if (strcmp(token, "++") == 0 || strcmp(token1, "++") == 0 ||
                    strcmp(token, "--") == 0 || strcmp(token1, "--") == 0) {
             // 后置自增/自减
-            ast_add_attr("operator", token);
+            char op[4];
+            strncpy(op, token, sizeof(op) - 1);
+            op[sizeof(op) - 1] = '\0';
+
+            ast_add_attr("operator", op);
             ast_add_attr("position", "postfix");
 
             // 变量已声明时的检查
@@ -1602,13 +1815,54 @@ int expression() {
                 }
 
                 if (!has_fatal_error) {
-                    if (strcmp(token, "++") == 0) {
-                        strcpy(codes[codesIndex].opt, "INC");
+                    // 生成自增/自减代码
+                    if (strcmp(op, "++") == 0) {
+                        // x++ 相当于: LOAD x; LOADI 1; ADD; STO x
+                        strcpy(codes[codesIndex].opt, "LOAD");
+                        codes[codesIndex].operand = pos;
+                        codesIndex++;
+
+                        if (codesIndex < MAX_CODES) {
+                            strcpy(codes[codesIndex].opt, "LOADI");
+                            codes[codesIndex].operand = 1;
+                            codesIndex++;
+                        }
+
+                        if (codesIndex < MAX_CODES) {
+                            strcpy(codes[codesIndex].opt, "ADD");
+                            codes[codesIndex].operand = 0;
+                            codesIndex++;
+                        }
+
+                        if (codesIndex < MAX_CODES) {
+                            strcpy(codes[codesIndex].opt, "STO");
+                            codes[codesIndex].operand = pos;
+                            codesIndex++;
+                        }
                     } else {
-                        strcpy(codes[codesIndex].opt, "DEC");
+                        // x-- 相当于: LOAD x; LOADI 1; SUB; STO x
+                        strcpy(codes[codesIndex].opt, "LOAD");
+                        codes[codesIndex].operand = pos;
+                        codesIndex++;
+
+                        if (codesIndex < MAX_CODES) {
+                            strcpy(codes[codesIndex].opt, "LOADI");
+                            codes[codesIndex].operand = 1;
+                            codesIndex++;
+                        }
+
+                        if (codesIndex < MAX_CODES) {
+                            strcpy(codes[codesIndex].opt, "SUB");
+                            codes[codesIndex].operand = 0;
+                            codesIndex++;
+                        }
+
+                        if (codesIndex < MAX_CODES) {
+                            strcpy(codes[codesIndex].opt, "STO");
+                            codes[codesIndex].operand = pos;
+                            codesIndex++;
+                        }
                     }
-                    codes[codesIndex].operand = pos;
-                    codesIndex++;
                 }
 
                 mark_variable_initialized(var_name);
@@ -1637,8 +1891,16 @@ int expression() {
                 }
 
                 if (!has_fatal_error) {
+                    // LOAD指令：将变量值压入栈
                     strcpy(codes[codesIndex].opt, "LOAD");
                     codes[codesIndex].operand = pos;
+                    codesIndex++;
+                }
+            } else {
+                // 变量未声明，但仍然生成LOAD指令（地址为0）
+                if (!has_fatal_error) {
+                    strcpy(codes[codesIndex].opt, "LOAD");
+                    codes[codesIndex].operand = 0;  // 无效地址
                     codesIndex++;
                 }
             }
@@ -1693,13 +1955,66 @@ int expression() {
             }
 
             if (!has_fatal_error) {
+                // ++x 相当于: LOAD x; LOADI 1; ADD; STO x; LOAD x
                 if (op[0] == '+') {
-                    strcpy(codes[codesIndex].opt, "PRE_INC");
+                    // 计算新值
+                    strcpy(codes[codesIndex].opt, "LOAD");
+                    codes[codesIndex].operand = pos;
+                    codesIndex++;
+
+                    if (codesIndex < MAX_CODES) {
+                        strcpy(codes[codesIndex].opt, "LOADI");
+                        codes[codesIndex].operand = 1;
+                        codesIndex++;
+                    }
+
+                    if (codesIndex < MAX_CODES) {
+                        strcpy(codes[codesIndex].opt, "ADD");
+                        codes[codesIndex].operand = 0;
+                        codesIndex++;
+                    }
+
+                    if (codesIndex < MAX_CODES) {
+                        strcpy(codes[codesIndex].opt, "STO");
+                        codes[codesIndex].operand = pos;
+                        codesIndex++;
+                    }
+
+                    if (codesIndex < MAX_CODES) {
+                        strcpy(codes[codesIndex].opt, "LOAD");
+                        codes[codesIndex].operand = pos;
+                        codesIndex++;
+                    }
                 } else {
-                    strcpy(codes[codesIndex].opt, "PRE_DEC");
+                    // --x 相当于: LOAD x; LOADI 1; SUB; STO x; LOAD x
+                    strcpy(codes[codesIndex].opt, "LOAD");
+                    codes[codesIndex].operand = pos;
+                    codesIndex++;
+
+                    if (codesIndex < MAX_CODES) {
+                        strcpy(codes[codesIndex].opt, "LOADI");
+                        codes[codesIndex].operand = 1;
+                        codesIndex++;
+                    }
+
+                    if (codesIndex < MAX_CODES) {
+                        strcpy(codes[codesIndex].opt, "SUB");
+                        codes[codesIndex].operand = 0;
+                        codesIndex++;
+                    }
+
+                    if (codesIndex < MAX_CODES) {
+                        strcpy(codes[codesIndex].opt, "STO");
+                        codes[codesIndex].operand = pos;
+                        codesIndex++;
+                    }
+
+                    if (codesIndex < MAX_CODES) {
+                        strcpy(codes[codesIndex].opt, "LOAD");
+                        codes[codesIndex].operand = pos;
+                        codesIndex++;
+                    }
                 }
-                codes[codesIndex].operand = pos;
-                codesIndex++;
             }
 
             mark_variable_initialized(token1);
@@ -1724,6 +2039,7 @@ int expression() {
     return es;
 }
 
+// 在bool_expr()中恢复类型检查
 int bool_expr() {
     int es = 0;
 
@@ -1746,6 +2062,7 @@ int bool_expr() {
         ast_begin("BinaryExpression");
         ast_add_attr("operator", op);
 
+        // 保存右边的token用于类型检查
         char saved_token[64], saved_token1[256];
         strcpy(saved_token, token);
         strcpy(saved_token1, token1);
@@ -1756,23 +2073,19 @@ int bool_expr() {
             return es;
         }
 
-        // 增强的类型检查
-        if (is_string_literal(saved_token1)) {
-            report_error(50, "比较运算: 字符串不能参与数值比较");
-        }
 
+        // 检查数值类型兼容性
         if (!check_type_compatible(TYPE_INT, TYPE_INT, "比较运算")) {
             // 错误已报告
         }
 
         if (!has_fatal_error) {
-            if (strcmp(op, ">") == 0) strcpy(codes[codesIndex].opt, "GT");
-            else if (strcmp(op, ">=") == 0) strcpy(codes[codesIndex].opt, "GE");
-            else if (strcmp(op, "<") == 0) strcpy(codes[codesIndex].opt, "LT");
-            else if (strcmp(op, "<=") == 0) strcpy(codes[codesIndex].opt, "LE");
-            else if (strcmp(op, "==") == 0) strcpy(codes[codesIndex].opt, "EQ");
-            else if (strcmp(op, "!=") == 0) strcpy(codes[codesIndex].opt, "NE");
-            codesIndex++;
+            if (strcmp(op, ">") == 0) gen_code("GT", 0);
+            else if (strcmp(op, ">=") == 0) gen_code("GE", 0);
+            else if (strcmp(op, "<") == 0) gen_code("LT", 0);
+            else if (strcmp(op, "<=") == 0) gen_code("LE", 0);
+            else if (strcmp(op, "==") == 0) gen_code("EQ", 0);
+            else if (strcmp(op, "!=") == 0) gen_code("NE", 0);
         }
 
         ast_end();
@@ -1781,6 +2094,7 @@ int bool_expr() {
     return es;
 }
 
+// 在arithmetic_expr中恢复类型检查
 int additive_expr() {
     int es = 0;
 
@@ -1802,10 +2116,28 @@ int additive_expr() {
         ast_begin("BinaryExpression");
         ast_add_attr("operator", op);
 
+        // 检查运算数类型
+        char saved_token[64], saved_token1[256];
+        strcpy(saved_token, token);
+        strcpy(saved_token1, token1);
+
         es = term();
         if (es > 0) {
             ast_end();
             return es;
+        }
+
+        // 算术运算的类型检查
+        if (is_string_literal(saved_token1)) {
+            if (op[0] == '+') {
+                report_warning("字符串连接操作: %s", saved_token1);
+                // 字符串连接特殊处理
+            } else {
+                report_error(50, "算术运算: 字符串不能参与减、乘、除运算");
+            }
+        } else if (strcmp(saved_token, "true") == 0 || strcmp(saved_token1, "true") == 0 ||
+                   strcmp(saved_token, "false") == 0 || strcmp(saved_token1, "false") == 0) {
+            report_error(50, "算术运算: 布尔值不能参与数值运算");
         }
 
         if (!check_type_compatible(TYPE_INT, TYPE_INT, "算术运算")) {
@@ -1814,11 +2146,10 @@ int additive_expr() {
 
         if (!has_fatal_error) {
             if (op[0] == '+') {
-                strcpy(codes[codesIndex].opt, "ADD");
+                gen_code("ADD", 0);
             } else {
-                strcpy(codes[codesIndex].opt, "SUB");
+                gen_code("SUB", 0);
             }
-            codesIndex++;
         }
 
         ast_end();
@@ -1827,6 +2158,7 @@ int additive_expr() {
     return es;
 }
 
+// 同样恢复term()中的类型检查
 int term() {
     int es = 0;
 
@@ -1848,10 +2180,22 @@ int term() {
         ast_begin("BinaryExpression");
         ast_add_attr("operator", op);
 
+        char saved_token[64], saved_token1[256];
+        strcpy(saved_token, token);
+        strcpy(saved_token1, token1);
+
         es = factor();
         if (es > 0) {
             ast_end();
             return es;
+        }
+
+        // 乘除运算的类型检查
+        if (is_string_literal(saved_token1)) {
+            report_error(50, "算术运算: 字符串不能参与乘、除运算");
+        } else if (strcmp(saved_token, "true") == 0 || strcmp(saved_token1, "true") == 0 ||
+                   strcmp(saved_token, "false") == 0 || strcmp(saved_token1, "false") == 0) {
+            report_error(50, "算术运算: 布尔值不能参与数值运算");
         }
 
         if (!check_type_compatible(TYPE_INT, TYPE_INT, "算术运算")) {
@@ -1860,11 +2204,10 @@ int term() {
 
         if (!has_fatal_error) {
             if (op[0] == '*') {
-                strcpy(codes[codesIndex].opt, "MUL");
+                gen_code("MUL", 0);
             } else {
-                strcpy(codes[codesIndex].opt, "DIV");
+                gen_code("DIV", 0);
             }
-            codesIndex++;
         }
 
         ast_end();
@@ -1872,7 +2215,6 @@ int term() {
 
     return es;
 }
-
 int factor() {
     int es = 0;
 
@@ -1899,7 +2241,7 @@ int factor() {
                 report_warning("变量 %s 可能未初始化", token1);
             }
 
-            // 检查数组访问
+            // 检查数组类型
             if (symbol[pos].type == TYPE_ARRAY) {
                 report_error(64, "数组 %s 需要下标访问", token1);
             }
@@ -1910,6 +2252,8 @@ int factor() {
                 codesIndex++;
             }
         } else {
+            // 变量未声明
+            report_error(23, "变量 %s 未声明", token1);
             return 23;
         }
 
@@ -1924,7 +2268,8 @@ int factor() {
         }
 
         if (!has_fatal_error) {
-            strcpy(codes[codesIndex].opt, "LIT");
+            // 生成LOADI指令加载常量
+            strcpy(codes[codesIndex].opt, "LOADI");
 
             if (is_float_string(token1)) {
                 double float_val = atof(token1);
@@ -1943,6 +2288,9 @@ int factor() {
         ast_add_attr("value", token1);
         ast_end();
 
+        // 字符串常量不支持数值运算
+        report_error(50, "字符串常量 %s 不能参与数值运算", token1);
+
         if (!read_next_token()) return 10;
     } else if (strcmp(token, "true") == 0 || strcmp(token1, "true") == 0 ||
                strcmp(token, "false") == 0 || strcmp(token1, "false") == 0) {
@@ -1951,7 +2299,7 @@ int factor() {
         ast_end();
 
         if (!has_fatal_error) {
-            strcpy(codes[codesIndex].opt, "LIT_BOOL");
+            strcpy(codes[codesIndex].opt, "LOADI");
             codes[codesIndex].operand = (strcmp(token1, "true") == 0) ? 1 : 0;
             codesIndex++;
         }
@@ -1964,7 +2312,6 @@ int factor() {
 
     return es;
 }
-
 // ===================== 主函数 =====================
 int main() {
     return TESTparse();
