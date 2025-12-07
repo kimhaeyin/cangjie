@@ -8,7 +8,36 @@
 #define maxsymbolIndex 100
 #define MAX_CODES 200
 #define MAX_ERRORS 100
-int lookup(char *name, int *pPosition);
+#define MAX_SCOPE_LEVEL 10
+
+
+// ===================== 函数声明 =====================
+int TESTparse();
+int program();
+int main_declaration();
+int function_body();
+int statement();
+int expression_stat();
+int expression();
+int bool_expr();
+int additive_expr();
+int term();
+int factor();
+int if_stat();
+int while_stat();
+int for_stat();
+int write_stat();
+int read_stat();
+int declaration_stat();
+int declaration_list();
+int statement_list();
+int compound_stat();
+int call_stat();
+int break_stat();
+int continue_stat();
+void report_error(int error_code, const char *fmt, ...);
+int lookup_current_scope(char *name, int *pPosition);
+
 // 数据类型枚举
 enum DataType {
     TYPE_INT,
@@ -16,10 +45,26 @@ enum DataType {
     TYPE_DOUBLE,
     TYPE_CHAR,
     TYPE_STRING,
+    TYPE_BOOL,
+    TYPE_VOID,
+    TYPE_ARRAY,
     TYPE_UNKNOWN
 };
 
-enum Category_symbol { variable, function };
+enum Category_symbol { variable, function, parameter };
+
+// 数组信息结构
+typedef struct {
+    int dimensions;     // 数组维数
+    int size[5];        // 各维大小（最大支持5维）
+} ArrayInfo;
+
+// 作用域栈
+typedef struct {
+    int start_symbol;   // 该作用域开始的符号索引
+    int level;          // 作用域层级
+    char type[10];      // 作用域类型：global, function, block, loop
+} ScopeEntry;
 
 // 错误信息结构
 typedef struct {
@@ -44,7 +89,7 @@ int codesIndex = 0;
 int temp_var_count = 0;
 int label_count = 0;
 
-// 符号表结构
+// 符号表结构（增强版）
 typedef struct {
     char name[64];
     enum Category_symbol kind;
@@ -52,12 +97,22 @@ typedef struct {
     int address;
     int initialized;
     int line_declared;
+    int scope_level;        // 新增：作用域层级
+    ArrayInfo array_info;   // 新增：数组信息
+    int is_param;           // 新增：是否为参数
+    int param_index;        // 新增：参数索引
 } SymbolEntry;
 
 SymbolEntry symbol[maxsymbolIndex];
 int symbolIndex = 0;
 int offset;
 int current_line = 1;
+
+// 作用域管理
+ScopeEntry scope_stack[MAX_SCOPE_LEVEL];
+int scope_top = -1;
+int current_scope_level = 0;
+int in_loop = 0;  // 是否在循环内
 
 // AST相关变量
 char *astText = NULL;
@@ -69,37 +124,118 @@ char token[64], token1[256];
 char tokenfile[260];
 FILE *fpTokenin;
 
+// ===================== 作用域管理函数 =====================
+
+void enter_scope(const char *type) {
+    if (scope_top >= MAX_SCOPE_LEVEL - 1) {
+        report_error(60, "作用域嵌套过深");
+        return;
+    }
+
+    scope_top++;
+    scope_stack[scope_top].start_symbol = symbolIndex;
+    scope_stack[scope_top].level = current_scope_level;
+    strcpy(scope_stack[scope_top].type, type);
+
+    current_scope_level++;
+
+    printf("进入作用域: %s (层级: %d)\n", type, current_scope_level);
+
+    if (strcmp(type, "loop") == 0) {
+        in_loop++;
+    }
+}
+
+void exit_scope() {
+    if (scope_top < 0) return;
+
+    printf("退出作用域: %s (层级: %d)\n",
+           scope_stack[scope_top].type, current_scope_level);
+
+    // 如果是循环作用域，减少循环计数
+    if (strcmp(scope_stack[scope_top].type, "loop") == 0 && in_loop > 0) {
+        in_loop--;
+    }
+
+    // 从符号表中移除该作用域的符号（简化：只标记作用域结束）
+    current_scope_level--;
+    scope_top--;
+}
+
+int get_current_scope_level() {
+    return current_scope_level;
+}
+
 // ===================== 辅助函数 =====================
 
-// 检查字符串是否为浮点数
+// 修复后的辅助函数
 int is_float_string(const char *str) {
     if (!str || !*str) return 0;
 
     int has_dot = 0;
-    for (int i = 0; str[i] != '\0'; i++) {
-        if (str[i] == '.') {
-            if (has_dot) return 0; // 多个小数点
-            has_dot = 1;
-        } else if (str[i] < '0' || str[i] > '9') {
-            return 0; // 非数字字符
+    int has_digit = 0;
+    int i = 0;
+
+    // 检查是否有符号
+    if (str[i] == '+' || str[i] == '-') {
+        i++;
+    }
+
+    // 检查整数部分
+    while (str[i] != '\0' && str[i] >= '0' && str[i] <= '9') {
+        has_digit = 1;
+        i++;
+    }
+
+    // 检查小数点和小数部分
+    if (str[i] == '.') {
+        has_dot = 1;
+        i++;
+
+        // 检查小数部分
+        while (str[i] != '\0' && str[i] >= '0' && str[i] <= '9') {
+            has_digit = 1;
+            i++;
         }
     }
-    return has_dot;
+
+    // 检查科学计数法（可选）
+    if (has_digit && (str[i] == 'e' || str[i] == 'E')) {
+        i++;
+        if (str[i] == '+' || str[i] == '-') {
+            i++;
+        }
+        while (str[i] != '\0' && str[i] >= '0' && str[i] <= '9') {
+            i++;
+        }
+    }
+
+    // 如果整个字符串都被处理了，并且有数字，且有小数点，才是浮点数
+    return (str[i] == '\0' && has_digit && has_dot);
 }
 
-// 检查字符串是否为整数
 int is_int_string(const char *str) {
     if (!str || !*str) return 0;
 
-    for (int i = 0; str[i] != '\0'; i++) {
+    int i = 0;
+
+    // 检查符号
+    if (str[i] == '+' || str[i] == '-') {
+        i++;
+    }
+
+    // 检查所有字符都是数字
+    while (str[i] != '\0') {
         if (str[i] < '0' || str[i] > '9') {
             return 0;
         }
+        i++;
     }
-    return 1;
+
+    // 确保至少有一个数字
+    return (i > 0 && (str[0] != '+' && str[0] != '-')) || (i > 1);
 }
 
-// 检查字符串是否为字符串字面量
 int is_string_literal(const char *str) {
     if (!str || strlen(str) < 2) return 0;
     return (str[0] == '"' && str[strlen(str)-1] == '"');
@@ -144,7 +280,7 @@ void report_warning(const char *fmt, ...) {
 }
 
 void print_all_errors() {
-    printf("\n=== 错误和警告报告 ===\n");
+    printf("\n=== 语义分析报告 ===\n");
 
     int error_num = 0;
     int warning_num = 0;
@@ -163,9 +299,9 @@ void print_all_errors() {
     printf("\n总结: 共发现 %d 个错误，%d 个警告\n", error_num, warning_num);
 
     if (error_num == 0 && warning_num == 0) {
-        printf("语法和语义检查通过！\n");
+        printf("语义分析通过！\n");
     } else if (error_num == 0) {
-        printf("语法检查通过，但有警告需要注意。\n");
+        printf("语义检查通过，但有警告需要注意。\n");
     } else if (has_fatal_error) {
         printf("存在致命错误，无法生成中间代码。\n");
     }
@@ -270,10 +406,14 @@ const char* type_to_string(enum DataType type) {
         case TYPE_DOUBLE: return "double";
         case TYPE_CHAR: return "char";
         case TYPE_STRING: return "string";
+        case TYPE_BOOL: return "bool";
+        case TYPE_VOID: return "void";
+        case TYPE_ARRAY: return "array";
         default: return "unknown";
     }
 }
 
+// 增强的类型兼容性检查
 int check_type_compatible(enum DataType t1, enum DataType t2, const char *context) {
     if (t1 == TYPE_UNKNOWN || t2 == TYPE_UNKNOWN) {
         return 1;
@@ -281,16 +421,34 @@ int check_type_compatible(enum DataType t1, enum DataType t2, const char *contex
 
     if (t1 == t2) return 1;
 
-    // 字符串类型特殊处理
-    if (t1 == TYPE_STRING || t2 == TYPE_STRING) {
-        report_error(50, "%s: 字符串类型与其他类型不兼容", context);
+    // 数组类型检查
+    if (t1 == TYPE_ARRAY || t2 == TYPE_ARRAY) {
+        report_error(50, "%s: 数组类型不能与其他类型混合运算", context);
         return 0;
     }
 
-    // 允许的隐式类型转换
+    // 字符串类型特殊处理
+    if (t1 == TYPE_STRING || t2 == TYPE_STRING) {
+        if (t1 != t2) {
+            report_error(50, "%s: 字符串类型只能与字符串类型运算", context);
+            return 0;
+        }
+        return 1;
+    }
+
+    // 布尔类型检查
+    if (t1 == TYPE_BOOL || t2 == TYPE_BOOL) {
+        if (t1 != t2) {
+            report_error(50, "%s: 布尔类型只能与布尔类型运算", context);
+            return 0;
+        }
+        return 1;
+    }
+
+    // 允许的隐式数值类型转换
     if ((t1 == TYPE_INT && (t2 == TYPE_FLOAT || t2 == TYPE_DOUBLE)) ||
         (t1 == TYPE_FLOAT && t2 == TYPE_DOUBLE) ||
-        (t1 == TYPE_CHAR && t2 == TYPE_INT)) {
+        (t1 == TYPE_CHAR && (t2 == TYPE_INT || t2 == TYPE_FLOAT || t2 == TYPE_DOUBLE))) {
         report_warning("%s: 从 %s 到 %s 的隐式类型转换",
                       context, type_to_string(t2), type_to_string(t1));
         return 1;
@@ -312,7 +470,7 @@ int check_type_compatible(enum DataType t1, enum DataType t2, const char *contex
 
 int check_variable_initialized(char *name) {
     int pos;
-    if (lookup(name, &pos) == 0 && symbol[pos].kind == variable) {
+    if (lookup_current_scope(name, &pos) == 0 && symbol[pos].kind == variable) {
         return symbol[pos].initialized;
     }
     return 1;
@@ -320,22 +478,58 @@ int check_variable_initialized(char *name) {
 
 void mark_variable_initialized(char *name) {
     int pos;
-    if (lookup(name, &pos) == 0 && symbol[pos].kind == variable) {
+    if (lookup_current_scope(name, &pos) == 0 && symbol[pos].kind == variable) {
         symbol[pos].initialized = 1;
     }
 }
 
 enum DataType get_variable_type(char *name) {
     int pos;
-    if (lookup(name, &pos) == 0) {
+    if (lookup_current_scope(name, &pos) == 0) {
         return symbol[pos].type;
     }
     return TYPE_UNKNOWN;
 }
 
-// ===================== 符号表函数 =====================
+// 控制流检查：检查是否在循环内
+void check_in_loop(const char *statement) {
+    if (in_loop == 0) {
+        report_error(61, "%s 语句不在循环内部", statement);
+    }
+}
 
-int insert_Symbol(enum Category_symbol category, char *name, enum DataType type) {
+// ===================== 符号表函数（增强） =====================
+
+int lookup_current_scope(char *name, int *pPosition) {
+    int i;
+    for (i = symbolIndex - 1; i >= 0; i--) {
+        if (symbol[i].scope_level <= current_scope_level &&
+            strcmp(symbol[i].name, name) == 0) {
+            *pPosition = i;
+            return 0;
+            }
+    }
+
+    // 只返回错误码，不自动报告错误
+    // 让调用者决定是否报告错误
+    return 23;  // 23表示未找到
+}
+
+// 全局查找符号
+int lookup_global(char *name, int *pPosition) {
+    int i;
+    for (i = symbolIndex - 1; i >= 0; i--) {
+        if (strcmp(symbol[i].name, name) == 0) {
+            *pPosition = i;
+            return 0;
+        }
+    }
+    return 23;
+}
+
+// 插入符号到符号表
+int insert_Symbol(enum Category_symbol category, char *name, enum DataType type,
+                  int is_array, int array_dim, int *array_sizes, int is_param) {
     int i, es = 0;
 
     if (symbolIndex >= maxsymbolIndex) {
@@ -343,8 +537,10 @@ int insert_Symbol(enum Category_symbol category, char *name, enum DataType type)
         return 21;
     }
 
+    // 检查当前作用域重复定义
     for (i = symbolIndex - 1; i >= 0; i--) {
-        if (strcmp(symbol[i].name, name) == 0) {
+        if (symbol[i].scope_level == current_scope_level &&
+            strcmp(symbol[i].name, name) == 0) {
             if (symbol[i].kind == category) {
                 if (category == function) {
                     report_error(32, "函数名 %s 重复定义", name);
@@ -354,13 +550,8 @@ int insert_Symbol(enum Category_symbol category, char *name, enum DataType type)
                     es = 22;
                 }
             } else {
-                if (category == function) {
-                    report_error(32, "%s 已经定义为变量，不能作为函数名", name);
-                    es = 32;
-                } else {
-                    report_error(22, "%s 已经定义为函数，不能作为变量名", name);
-                    es = 22;
-                }
+                report_error(22, "%s 名称冲突", name);
+                es = 22;
             }
             break;
         }
@@ -368,38 +559,39 @@ int insert_Symbol(enum Category_symbol category, char *name, enum DataType type)
 
     if (es > 0) return es;
 
-    switch (category) {
-        case function:
-            symbol[symbolIndex].kind = function;
-            symbol[symbolIndex].type = type;
-            symbol[symbolIndex].initialized = 1;
-            break;
-        case variable:
-            symbol[symbolIndex].kind = variable;
-            symbol[symbolIndex].type = type;
-            symbol[symbolIndex].initialized = 0;
+    // 插入新符号
+    symbol[symbolIndex].kind = category;
+    symbol[symbolIndex].type = type;
+    symbol[symbolIndex].scope_level = current_scope_level;
+    symbol[symbolIndex].line_declared = current_line;
+    symbol[symbolIndex].is_param = is_param;
+
+    if (category == function) {
+        symbol[symbolIndex].initialized = 1;
+    } else {
+        symbol[symbolIndex].initialized = 0;
+        if (!is_param) {
             symbol[symbolIndex].address = offset;
-            symbol[symbolIndex].line_declared = current_line;
             offset++;
-            break;
+        }
+    }
+
+    // 处理数组信息
+    if (is_array && array_dim > 0) {
+        symbol[symbolIndex].type = TYPE_ARRAY;
+        symbol[symbolIndex].array_info.dimensions = array_dim;
+        for (i = 0; i < array_dim && i < 5; i++) {
+            symbol[symbolIndex].array_info.size[i] = array_sizes[i];
+        }
     }
 
     strncpy(symbol[symbolIndex].name, name, sizeof(symbol[symbolIndex].name) - 1);
     symbol[symbolIndex].name[sizeof(symbol[symbolIndex].name) - 1] = '\0';
     symbolIndex++;
-    return 0;
-}
 
-int lookup(char *name, int *pPosition) {
-    int i;
-    for (i = symbolIndex - 1; i >= 0; i--) {
-        if (strcmp(symbol[i].name, name) == 0) {
-            *pPosition = i;
-            return 0;
-        }
-    }
-    report_error(23, "标识符 %s 未声明", name);
-    return 23;
+    printf("插入符号: %s, 类型: %s, 作用域: %d\n",
+           name, type_to_string(type), current_scope_level);
+    return 0;
 }
 
 // ===================== Token读取函数 =====================
@@ -473,28 +665,7 @@ void skip_to_sync_point() {
     }
 }
 
-// ===================== 函数声明 =====================
-int TESTparse();
-int program();
-int main_declaration();
-int function_body();
-int statement();
-int expression_stat();
-int expression();
-int bool_expr();
-int additive_expr();
-int term();
-int factor();
-int if_stat();
-int while_stat();
-int for_stat();
-int write_stat();
-int read_stat();
-int declaration_stat();
-int declaration_list();
-int statement_list();
-int compound_stat();
-int call_stat();
+
 
 // ===================== 主测试函数 =====================
 int TESTparse() {
@@ -514,6 +685,12 @@ int TESTparse() {
     error_count = 0;
     has_fatal_error = 0;
     current_line = 0;
+    scope_top = -1;
+    current_scope_level = 0;
+    in_loop = 0;
+
+    // 进入全局作用域
+    enter_scope("global");
 
     if (!read_next_token()) {
         printf("错误: 文件为空\n");
@@ -523,6 +700,9 @@ int TESTparse() {
 
     es = program();
     fclose(fpTokenin);
+
+    // 退出全局作用域
+    exit_scope();
 
     print_all_errors();
 
@@ -573,7 +753,7 @@ int program() {
 
     ast_begin("main_declaration");
 
-    es = insert_Symbol(function, "main", TYPE_INT);
+    es = insert_Symbol(function, "main", TYPE_INT, 0, 0, NULL, 0);
     if (es > 0) {
         ast_end();
         ast_end();
@@ -621,7 +801,12 @@ int main_declaration() {
     }
 
     if (!read_next_token()) return 10;
+
+    // 进入函数作用域
+    enter_scope("function");
     es = function_body();
+    exit_scope();
+
     return es;
 }
 
@@ -686,7 +871,7 @@ int declaration_stat() {
 
     if (!read_next_token()) return 10;
     if (strcmp(token, "ID") != 0 && strcmp(token1, "ID") != 0) {
-        report_error(3, "期望标识符，得到: %s %s", token, token1);
+        report_error(3, "期望标识符，得到: %s", token1);
         es = 3;
         skip_to_sync_point();
         ast_end();
@@ -730,18 +915,29 @@ int declaration_stat() {
     } else if (strcmp(token, "char") == 0 || strcmp(token1, "char") == 0) {
         var_type = TYPE_CHAR;
         ast_add_attr("kind", "char");
+    } else if (strcmp(token, "bool") == 0 || strcmp(token1, "bool") == 0) {
+        var_type = TYPE_BOOL;
+        ast_add_attr("kind", "bool");
     } else {
-        report_error(8, "期望类型关键字，得到: %s %s", token, token1);
-        es = 8;
-        skip_to_sync_point();
-        ast_end();
-        ast_end();
-        ast_end();
-        ast_end();
-        return es;
+        // 检查是否为数组声明
+        if (strcmp(token, "array") == 0 || strcmp(token1, "array") == 0) {
+            // 这里可以扩展支持数组声明
+            report_error(62, "数组声明暂不支持");
+            var_type = TYPE_ARRAY;
+            ast_add_attr("kind", "array");
+        } else {
+            report_error(8, "期望类型关键字，得到: %s %s", token, token1);
+            es = 8;
+            skip_to_sync_point();
+            ast_end();
+            ast_end();
+            ast_end();
+            ast_end();
+            return es;
+        }
     }
 
-    es = insert_Symbol(variable, var_name, var_type);
+    es = insert_Symbol(variable, var_name, var_type, 0, 0, NULL, 0);
     if (es > 0) {
         ast_end();
         ast_end();
@@ -767,7 +963,6 @@ int statement_list() {
     int es = 0;
     ast_begin("StatementList");
 
-    // 防止无限循环的计数器
     int loop_count = 0;
     int max_loops = 1000;
 
@@ -782,7 +977,15 @@ int statement_list() {
 
         printf("解析语句，当前token: %s %s\n", token, token1);
 
-        es = statement();
+        // 检查break/continue语句
+        if (strcmp(token, "break") == 0 || strcmp(token1, "break") == 0) {
+            es = break_stat();
+        } else if (strcmp(token, "continue") == 0 || strcmp(token1, "continue") == 0) {
+            es = continue_stat();
+        } else {
+            es = statement();
+        }
+
         if (es > 0 && has_fatal_error) {
             ast_end();
             return es;
@@ -795,6 +998,64 @@ int statement_list() {
 
     ast_end();
     return es;
+}
+
+// break语句处理
+int break_stat() {
+    ast_begin("BreakStatement");
+
+    // 控制流检查：确保在循环内
+    check_in_loop("break");
+
+    if (!has_fatal_error) {
+        // 生成跳转代码（实际应该跳转到循环结束）
+        // 简化处理：生成BREAK标记
+        gen_code("BREAK", 0);
+    }
+
+    if (!read_next_token()) {
+        ast_end();
+        return 10;
+    }
+
+    if (strcmp(token, ";") == 0 || strcmp(token1, ";") == 0) {
+        if (!read_next_token()) {
+            ast_end();
+            return 10;
+        }
+    }
+
+    ast_end();
+    return 0;
+}
+
+// continue语句处理
+int continue_stat() {
+    ast_begin("ContinueStatement");
+
+    // 控制流检查：确保在循环内
+    check_in_loop("continue");
+
+    if (!has_fatal_error) {
+        // 生成跳转代码（实际应该跳转到循环开始）
+        // 简化处理：生成CONTINUE标记
+        gen_code("CONTINUE", 0);
+    }
+
+    if (!read_next_token()) {
+        ast_end();
+        return 10;
+    }
+
+    if (strcmp(token, ";") == 0 || strcmp(token1, ";") == 0) {
+        if (!read_next_token()) {
+            ast_end();
+            return 10;
+        }
+    }
+
+    ast_end();
+    return 0;
 }
 
 int statement() {
@@ -815,7 +1076,10 @@ int statement() {
         ast_end();
     } else if (strcmp(token, "{") == 0 || strcmp(token1, "{") == 0) {
         ast_begin("CompoundStatement");
+        // 进入块作用域
+        enter_scope("block");
         es = compound_stat();
+        exit_scope();
         ast_end();
     } else if (strcmp(token, "call") == 0 || strcmp(token1, "call") == 0) {
         ast_begin("CallStatement");
@@ -919,9 +1183,15 @@ int while_stat() {
 
     int loop_start = codesIndex;
 
+    // 进入循环作用域
+    enter_scope("loop");
+
     if (!read_next_token()) return 10;
     es = bool_expr();
-    if (es > 0) return es;
+    if (es > 0) {
+        exit_scope();
+        return es;
+    }
 
     if (!has_fatal_error) {
         strcpy(codes[codesIndex].opt, "BRF");
@@ -930,11 +1200,16 @@ int while_stat() {
 
     if (strcmp(token, ")") != 0 && strcmp(token1, ")") != 0) {
         report_error(6, "期望)，得到: %s %s", token, token1);
+        exit_scope();
         return 6;
     }
 
     if (!read_next_token()) return 10;
     es = statement();
+
+    // 退出循环作用域
+    exit_scope();
+
     if (es > 0) return es;
 
     if (!has_fatal_error) {
@@ -965,6 +1240,9 @@ int for_stat() {
 
     int loop_start = codesIndex;
 
+    // 进入循环作用域
+    enter_scope("loop");
+
     if (strcmp(token, ";") != 0 && strcmp(token1, ";") != 0) {
         report_error(4, "期望;，得到: %s %s", token, token1);
         skip_to_sync_point();
@@ -975,7 +1253,10 @@ int for_stat() {
         ast_begin("Condition");
         es = bool_expr();
         ast_end();
-        if (es > 0) return es;
+        if (es > 0) {
+            exit_scope();
+            return es;
+        }
     }
 
     if (!has_fatal_error) {
@@ -1000,7 +1281,10 @@ int for_stat() {
         ast_begin("Increment");
         es = expression();
         ast_end();
-        if (es > 0) return es;
+        if (es > 0) {
+            exit_scope();
+            return es;
+        }
     }
 
     if (!has_fatal_error) {
@@ -1019,6 +1303,9 @@ int for_stat() {
     ast_begin("LoopBody");
     es = statement();
     ast_end();
+
+    // 退出循环作用域
+    exit_scope();
 
     if (!has_fatal_error) {
         strcpy(codes[codesIndex].opt, "BR");
@@ -1062,13 +1349,17 @@ int call_stat() {
 
     ast_add_attr("function_name", token1);
 
-    if (lookup(token1, &symbolPos) != 0) {
+    if (lookup_global(token1, &symbolPos) != 0) {
+        report_error(23, "函数 %s 未声明", token1);
         return 23;
     }
     if (symbol[symbolPos].kind != function) {
         report_error(35, "%s 不是函数名", token1);
         return 35;
     }
+
+    // 函数调用一致性检查：检查参数个数和类型（简化）
+    // 实际应该检查参数个数和类型是否匹配
 
     if (!has_fatal_error) {
         strcpy(codes[codesIndex].opt, "CALL");
@@ -1110,21 +1401,25 @@ int read_stat() {
 
     ast_add_attr("variable_name", token1);
 
-    if (lookup(token1, &pos) != 0) {
-        return 23;
-    }
-    if (symbol[pos].kind != variable) {
-        report_error(35, "%s 不是变量名", token1);
-        return 35;
-    }
+    // 修改这里：先检查是否找到
+    if (lookup_current_scope(token1, &pos) != 0) {
+        report_error(23, "变量 %s 未声明", token1);
+        // 继续执行，不立即返回
+    } else {
+        // 找到了，继续正常检查
+        if (symbol[pos].kind != variable) {
+            report_error(35, "%s 不是变量名", token1);
+            return 35;
+        }
 
-    if (!has_fatal_error) {
-        strcpy(codes[codesIndex].opt, "READ");
-        codes[codesIndex].operand = pos;
-        codesIndex++;
-    }
+        if (!has_fatal_error) {
+            strcpy(codes[codesIndex].opt, "READ");
+            codes[codesIndex].operand = pos;
+            codesIndex++;
+        }
 
-    mark_variable_initialized(token1);
+        mark_variable_initialized(token1);
+    }
 
     if (!read_next_token()) return 10;
     return es;
@@ -1142,22 +1437,30 @@ int write_stat() {
 
     ast_add_attr("variable_name", token1);
 
-    if (lookup(token1, &pos) != 0) {
-        return 23;
-    }
-    if (symbol[pos].kind != variable) {
-        report_error(35, "%s 不是变量名", token1);
-        return 35;
-    }
+    // 同样的修改
+    if (lookup_current_scope(token1, &pos) != 0) {
+        report_error(23, "变量 %s 未声明", token1);
+        // 继续执行
+    } else {
+        if (symbol[pos].kind != variable) {
+            report_error(35, "%s 不是变量名", token1);
+            return 35;
+        }
 
-    if (!check_variable_initialized(token1)) {
-        report_warning("变量 %s 可能未初始化", token1);
-    }
+        if (!check_variable_initialized(token1)) {
+            report_warning("变量 %s 可能未初始化", token1);
+        }
 
-    if (!has_fatal_error) {
-        strcpy(codes[codesIndex].opt, "WRITE");
-        codes[codesIndex].operand = pos;
-        codesIndex++;
+        enum DataType var_type = get_variable_type(token1);
+        if (var_type == TYPE_ARRAY) {
+            report_error(63, "不能直接输出数组变量 %s", token1);
+        }
+
+        if (!has_fatal_error) {
+            strcpy(codes[codesIndex].opt, "WRITE");
+            codes[codesIndex].operand = pos;
+            codesIndex++;
+        }
     }
 
     if (!read_next_token()) return 10;
@@ -1183,6 +1486,7 @@ int expression_stat() {
     return es;
 }
 
+// <expression>→ ID = <bool_expr> | <bool_expr>
 int expression() {
     int es = 0;
     ast_begin("Expression");
@@ -1194,14 +1498,26 @@ int expression() {
         strncpy(var_name, token1, sizeof(var_name) - 1);
         var_name[sizeof(var_name) - 1] = '\0';
 
-        int pos;
-        if (lookup(var_name, &pos) != 0) {
-            es = 23;
-            ast_end();
-            return es;
+        int pos = -1;  // 初始化为-1，表示未找到
+        int lookup_result = lookup_current_scope(var_name, &pos);
+
+        if (lookup_result != 0) {
+            // 变量未声明
+            report_error(23, "变量 %s 未声明", var_name);
+            // 不立即返回，继续解析以发现更多错误
+        } else {
+            // 找到了变量，检查是否是变量类型
+            if (symbol[pos].kind != variable) {
+                report_error(35, "%s 不是变量名", token1);
+                es = 35;
+            }
         }
 
-        enum DataType left_type = get_variable_type(var_name);
+        // 获取变量类型（如果找到了）
+        enum DataType left_type = TYPE_UNKNOWN;
+        if (lookup_result == 0) {
+            left_type = symbol[pos].type;
+        }
 
         char current_token[64], current_token1[256];
         strcpy(current_token, token);
@@ -1213,6 +1529,7 @@ int expression() {
         }
 
         if (strcmp(token, "=") == 0 || strcmp(token1, "=") == 0) {
+            // 赋值语句
             ast_begin("LeftValue");
             ast_add_attr("variable", var_name);
             ast_end();
@@ -1224,7 +1541,7 @@ int expression() {
                 return 10;
             }
 
-            // 记录当前token，用于检查赋值右侧的类型
+            // 保存右值开始的token
             char saved_token[64], saved_token1[256];
             strcpy(saved_token, token);
             strcpy(saved_token1, token1);
@@ -1233,20 +1550,30 @@ int expression() {
             es = bool_expr();
             ast_end();
 
-            // 类型检查：检查赋值语句类型匹配
-            // 获取右值的类型信息
-            if (strcmp(saved_token, "NUM") == 0 || strcmp(saved_token1, "NUM") == 0) {
-                // 检查数值类型
-                if (is_float_string(saved_token1) && left_type == TYPE_INT) {
-                    report_error(51, "不能将浮点数 %s 赋值给整型变量 %s", saved_token1, var_name);
+            // 类型检查（只在变量已声明且是变量类型时）
+            if (lookup_result == 0 && symbol[pos].kind == variable) {
+                if (strcmp(saved_token, "NUM") == 0 || strcmp(saved_token1, "NUM") == 0) {
+                    // 检查数值类型
+                    if (is_float_string(saved_token1) && left_type == TYPE_INT) {
+                        report_error(51, "不能将浮点数 %s 赋值给整型变量 %s", saved_token1, var_name);
+                    } else if (left_type == TYPE_BOOL) {
+                        report_error(51, "不能将数值 %s 赋值给布尔变量 %s", saved_token1, var_name);
+                    }
+                } else if (is_string_literal(saved_token1) && left_type != TYPE_STRING) {
+                    report_error(51, "不能将字符串赋值给非字符串变量 %s", var_name);
                 }
-            } else if (is_string_literal(saved_token1) && left_type != TYPE_STRING) {
-                report_error(51, "不能将字符串赋值给非字符串变量 %s", var_name);
+
+                // 检查数组类型
+                if (left_type == TYPE_ARRAY) {
+                    report_error(64, "不能直接给数组 %s 赋值", var_name);
+                }
+
+                // 标记变量已初始化
+                mark_variable_initialized(var_name);
             }
 
-            mark_variable_initialized(var_name);
-
-            if (!has_fatal_error) {
+            // 生成代码（只在没有致命错误且变量已声明时）
+            if (!has_fatal_error && lookup_result == 0 && symbol[pos].kind == variable) {
                 strcpy(codes[codesIndex].opt, "STO");
                 codes[codesIndex].operand = pos;
                 codesIndex++;
@@ -1254,24 +1581,38 @@ int expression() {
 
         } else if (strcmp(token, "++") == 0 || strcmp(token1, "++") == 0 ||
                    strcmp(token, "--") == 0 || strcmp(token1, "--") == 0) {
+            // 后置自增/自减
             ast_add_attr("operator", token);
             ast_add_attr("position", "postfix");
 
-            if (!check_variable_initialized(var_name)) {
-                report_warning("变量 %s 可能未初始化", var_name);
-            }
-
-            if (!has_fatal_error) {
-                if (strcmp(token, "++") == 0) {
-                    strcpy(codes[codesIndex].opt, "INC");
-                } else {
-                    strcpy(codes[codesIndex].opt, "DEC");
+            // 变量已声明时的检查
+            if (lookup_result == 0) {
+                if (!check_variable_initialized(var_name)) {
+                    report_warning("变量 %s 可能未初始化", var_name);
                 }
-                codes[codesIndex].operand = pos;
-                codesIndex++;
-            }
 
-            mark_variable_initialized(var_name);
+                // 类型检查：自增自减只能用于数值类型
+                if (left_type != TYPE_INT && left_type != TYPE_FLOAT && left_type != TYPE_DOUBLE) {
+                    report_error(65, "自增/自减操作不能用于 %s 类型变量", type_to_string(left_type));
+                }
+
+                // 检查数组类型
+                if (left_type == TYPE_ARRAY) {
+                    report_error(64, "不能对数组 %s 进行自增/自减操作", var_name);
+                }
+
+                if (!has_fatal_error) {
+                    if (strcmp(token, "++") == 0) {
+                        strcpy(codes[codesIndex].opt, "INC");
+                    } else {
+                        strcpy(codes[codesIndex].opt, "DEC");
+                    }
+                    codes[codesIndex].operand = pos;
+                    codesIndex++;
+                }
+
+                mark_variable_initialized(var_name);
+            }
 
             if (!read_next_token()) {
                 ast_end();
@@ -1280,23 +1621,34 @@ int expression() {
             ast_end();
             return 0;
         } else {
+            // 读取变量值（不是赋值也不是自增自减）
             strcpy(token, current_token);
             strcpy(token1, current_token1);
 
-            if (!check_variable_initialized(var_name)) {
-                report_warning("变量 %s 可能未初始化", var_name);
+            // 变量已声明时的检查
+            if (lookup_result == 0) {
+                if (!check_variable_initialized(var_name)) {
+                    report_warning("变量 %s 可能未初始化", var_name);
+                }
+
+                // 检查数组类型
+                if (left_type == TYPE_ARRAY) {
+                    report_error(64, "数组 %s 需要下标访问", var_name);
+                }
+
+                if (!has_fatal_error) {
+                    strcpy(codes[codesIndex].opt, "LOAD");
+                    codes[codesIndex].operand = pos;
+                    codesIndex++;
+                }
             }
 
-            if (!has_fatal_error) {
-                strcpy(codes[codesIndex].opt, "LOAD");
-                codes[codesIndex].operand = pos;
-                codesIndex++;
-            }
-
+            // 继续解析可能的表达式（如 x + 1）
             es = bool_expr();
         }
     } else if (strcmp(token, "++") == 0 || strcmp(token1, "++") == 0 ||
                strcmp(token, "--") == 0 || strcmp(token1, "--") == 0) {
+        // 前置自增/自减
         char op[4];
         strncpy(op, token, sizeof(op) - 1);
         op[sizeof(op) - 1] = '\0';
@@ -1314,27 +1666,44 @@ int expression() {
             return 7;
         }
 
-        int pos;
-        if (lookup(token1, &pos) != 0) {
-            ast_end();
-            return 23;
-        }
+        char var_name[256];
+        strncpy(var_name, token1, sizeof(var_name) - 1);
+        var_name[sizeof(var_name) - 1] = '\0';
 
-        if (!check_variable_initialized(token1)) {
-            report_warning("变量 %s 可能未初始化", token1);
-        }
+        int pos = -1;
+        int lookup_result = lookup_current_scope(token1, &pos);
 
-        if (!has_fatal_error) {
-            if (op[0] == '+') {
-                strcpy(codes[codesIndex].opt, "PRE_INC");
-            } else {
-                strcpy(codes[codesIndex].opt, "PRE_DEC");
+        if (lookup_result != 0) {
+            report_error(23, "变量 %s 未声明", token1);
+            // 继续执行
+        } else {
+            // 类型检查
+            enum DataType var_type = get_variable_type(token1);
+            if (var_type != TYPE_INT && var_type != TYPE_FLOAT && var_type != TYPE_DOUBLE) {
+                report_error(65, "自增/自减操作不能用于 %s 类型变量", type_to_string(var_type));
             }
-            codes[codesIndex].operand = pos;
-            codesIndex++;
-        }
 
-        mark_variable_initialized(token1);
+            // 检查数组类型
+            if (var_type == TYPE_ARRAY) {
+                report_error(64, "不能对数组 %s 进行自增/自减操作", token1);
+            }
+
+            if (!check_variable_initialized(token1)) {
+                report_warning("变量 %s 可能未初始化", token1);
+            }
+
+            if (!has_fatal_error) {
+                if (op[0] == '+') {
+                    strcpy(codes[codesIndex].opt, "PRE_INC");
+                } else {
+                    strcpy(codes[codesIndex].opt, "PRE_DEC");
+                }
+                codes[codesIndex].operand = pos;
+                codesIndex++;
+            }
+
+            mark_variable_initialized(token1);
+        }
 
         ast_begin("Operand");
         ast_add_attr("variable", token1);
@@ -1347,6 +1716,7 @@ int expression() {
         ast_end();
         return 0;
     } else {
+        // 普通表达式（不以标识符或自增自减开头）
         es = bool_expr();
     }
 
@@ -1376,7 +1746,6 @@ int bool_expr() {
         ast_begin("BinaryExpression");
         ast_add_attr("operator", op);
 
-        // 检查右操作数是否为字符串
         char saved_token[64], saved_token1[256];
         strcpy(saved_token, token);
         strcpy(saved_token1, token1);
@@ -1387,9 +1756,13 @@ int bool_expr() {
             return es;
         }
 
-        // 类型检查：比较运算的类型匹配
+        // 增强的类型检查
         if (is_string_literal(saved_token1)) {
             report_error(50, "比较运算: 字符串不能参与数值比较");
+        }
+
+        if (!check_type_compatible(TYPE_INT, TYPE_INT, "比较运算")) {
+            // 错误已报告
         }
 
         if (!has_fatal_error) {
@@ -1521,9 +1894,14 @@ int factor() {
         ast_end();
 
         int pos;
-        if (lookup(token1, &pos) == 0) {
+        if (lookup_current_scope(token1, &pos) == 0) {
             if (!check_variable_initialized(token1)) {
                 report_warning("变量 %s 可能未初始化", token1);
+            }
+
+            // 检查数组访问
+            if (symbol[pos].type == TYPE_ARRAY) {
+                report_error(64, "数组 %s 需要下标访问", token1);
             }
 
             if (!has_fatal_error) {
@@ -1541,7 +1919,6 @@ int factor() {
         ast_add_attr("value", token1);
         ast_end();
 
-        // 检查数值类型
         if (is_float_string(token1)) {
             report_warning("浮点数常量 %s 可能损失精度", token1);
         }
@@ -1549,7 +1926,6 @@ int factor() {
         if (!has_fatal_error) {
             strcpy(codes[codesIndex].opt, "LIT");
 
-            // 处理浮点数（简化：截断为整数）
             if (is_float_string(token1)) {
                 double float_val = atof(token1);
                 codes[codesIndex].operand = (int)float_val;
@@ -1561,29 +1937,32 @@ int factor() {
         }
 
         if (!read_next_token()) return 10;
-    }else if (strcmp(token, "STRING") == 0 || strcmp(token1, "STRING") == 0 ||
-               (token1[0] == '"' && token1[strlen(token1)-1] == '"')) {
-        // 处理字符串字面量
+    } else if (strcmp(token, "STRING") == 0 || strcmp(token1, "STRING") == 0 ||
+               is_string_literal(token1)) {
         ast_begin("StringLiteral");
         ast_add_attr("value", token1);
         ast_end();
 
-        // 可以生成字符串常量代码
+        if (!read_next_token()) return 10;
+    } else if (strcmp(token, "true") == 0 || strcmp(token1, "true") == 0 ||
+               strcmp(token, "false") == 0 || strcmp(token1, "false") == 0) {
+        ast_begin("BoolLiteral");
+        ast_add_attr("value", token1);
+        ast_end();
+
         if (!has_fatal_error) {
-            strcpy(codes[codesIndex].opt, "LIT_STR");
-            // 这里应该将字符串存入常量表，返回索引
-            codes[codesIndex].operand = 0; // 暂时用0表示
+            strcpy(codes[codesIndex].opt, "LIT_BOOL");
+            codes[codesIndex].operand = (strcmp(token1, "true") == 0) ? 1 : 0;
             codesIndex++;
         }
 
         if (!read_next_token()) return 10;
-               } else {
-                   report_error(7, "期望因子，得到: %s %s", token, token1);
-                   return 7;
-               }
+    } else {
+        report_error(7, "期望因子，得到: %s %s", token, token1);
+        return 7;
+    }
 
     return es;
-
 }
 
 // ===================== 主函数 =====================
