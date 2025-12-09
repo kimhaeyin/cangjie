@@ -299,7 +299,7 @@ void print_all_errors() {
     printf("\n总结: 共发现 %d 个错误，%d 个警告\n", error_num, warning_num);
 
     if (error_num == 0 && warning_num == 0) {
-        printf("语义分析通过！\n");
+        printf("语法语义分析通过！\n");
     } else if (error_num == 0) {
         printf("语义检查通过，但有警告需要注意。\n");
     } else if (has_fatal_error) {
@@ -1291,84 +1291,129 @@ int statement() {
 }
 
 int if_stat() {
-        int es = 0, cx1, cx2;
+    int es = 0, cx1, cx2;
+    int has_error = 0;  // 记录是否有错误
 
+    printf("解析if语句，当前token: %s %s\n", token, token1);
+
+    if (!read_next_token()) return 10;
+
+    // 检查左括号
+    if (strcmp(token, "(") != 0 && strcmp(token1, "(") != 0) {
+        report_error(5, "期望(，得到: %s %s", token, token1);
+        es = 5;
+        has_error = 1;
+        skip_to_sync_point();
+        // 不立即返回
+    } else {
+        // 正常情况：有括号
         if (!read_next_token()) return 10;
-        if (strcmp(token, "(") != 0 && strcmp(token1, "(") != 0) {
-            report_error(5, "期望(，得到: %s %s", token, token1);
-            es = 5;
-            skip_to_sync_point();
-            return es;
-        }
+    }
 
+    // 尝试解析条件表达式
+    int bool_es = bool_expr();
+    if (bool_es > 0) {
+        es = bool_es;
+        has_error = 1;
+        // 条件表达式解析出错，但仍然尝试继续
+    }
+
+    // 只有没有致命错误且条件表达式解析成功时才生成BRF指令
+    if (!has_fatal_error && !has_error) {
+        strcpy(codes[codesIndex].opt, "BRF");
+        cx1 = codesIndex++;
+    } else {
+        cx1 = -1;  // 标记无效
+    }
+
+    // 检查右括号
+    if (strcmp(token, ")") != 0 && strcmp(token1, ")") != 0) {
+        report_error(6, "期望)，得到: %s %s", token, token1);
+        es = 6;
+        has_error = 1;
+        skip_to_sync_point();
+        // 不立即返回
+    } else {
         if (!read_next_token()) return 10;
-        es = bool_expr();
-        if (es > 0) return es;
+    }
 
-        if (!has_fatal_error) {
-            strcpy(codes[codesIndex].opt, "BRF");
-            cx1 = codesIndex++;
-        }
+    // 解析if分支
+    printf("解析if分支，当前token: %s %s\n", token, token1);
+    int if_stmt_es = statement();
+    if (if_stmt_es > 0) {
+        es = if_stmt_es;
+        has_error = 1;
+    }
 
-        if (strcmp(token, ")") != 0 && strcmp(token1, ")") != 0) {
-            report_error(6, "期望)，得到: %s %s", token, token1);
-            es = 6;
-            skip_to_sync_point();
-            return es;
-        }
-
-        if (!read_next_token()) return 10;
-        es = statement();
-        if (es > 0) return es;
-
-        if (!has_fatal_error) {
-            strcpy(codes[codesIndex].opt, "BR");
-            cx2 = codesIndex++;
+    // 只有没有错误时才生成BR指令
+    if (!has_fatal_error && !has_error) {
+        strcpy(codes[codesIndex].opt, "BR");
+        cx2 = codesIndex++;
+        if (cx1 != -1) {
             codes[cx1].operand = codesIndex;  // 指向else语句开始或if结束
         }
+    } else {
+        cx2 = -1;  // 标记无效
+    }
 
-        if (strcmp(token, "else") == 0 || strcmp(token1, "else") == 0) {
-            ast_add_attr("has_else", "true");
-            if (!read_next_token()) return 10;
-            es = statement();
-            if (es > 0) return es;
+    // 检查是否有else
+    if (strcmp(token, "else") == 0 || strcmp(token1, "else") == 0) {
+        ast_add_attr("has_else", "true");
+        if (!read_next_token()) return 10;
 
-            if (!has_fatal_error) {
-                codes[cx2].operand = codesIndex;  // 指向if语句结束
-            }
-        } else {
-            ast_add_attr("has_else", "false");
-            if (!has_fatal_error) {
-                codes[cx1].operand = codesIndex;  // 条件为假时直接跳到这里
-            }
+        // 解析else分支
+        printf("解析else分支，当前token: %s %s\n", token, token1);
+        int else_stmt_es = statement();
+        if (else_stmt_es > 0) {
+            es = else_stmt_es;
+            has_error = 1;
         }
 
-        if (!has_fatal_error) {
-            codes[cx2].operand = codesIndex;  // BR指令跳转到这里
+        // 只有没有错误时才设置跳转地址
+        if (!has_fatal_error && !has_error && cx2 != -1) {
+            codes[cx2].operand = codesIndex;  // 指向if语句结束
         }
-        return es;
+    } else {
+        ast_add_attr("has_else", "false");
 
+        // 只有没有错误时才设置条件为假时的跳转地址
+        if (!has_fatal_error && !has_error && cx1 != -1) {
+            codes[cx1].operand = codesIndex;  // 条件为假时直接跳到这里
+        }
+    }
+
+    // 设置BR指令的跳转地址
+    if (!has_fatal_error && !has_error && cx2 != -1) {
+        codes[cx2].operand = codesIndex;  // BR指令跳转到这里
+    }
+
+    return es;
 }
-
 int while_stat() {
     int es = 0, cx1;
 
+    printf("解析while语句，当前token: %s %s\n", token, token1);
+
     if (!read_next_token()) return 10;
+
+    // 检查左括号
     if (strcmp(token, "(") != 0 && strcmp(token1, "(") != 0) {
         report_error(5, "期望(，得到: %s %s", token, token1);
-        return 5;
+        es = 5;
+        // 不立即返回，尝试错误恢复
+    } else {
+        // 正常情况：有括号
+        if (!read_next_token()) return 10;
     }
 
     int loop_start = codesIndex;
-
-    // 进入循环作用域
     enter_scope("loop");
 
-    if (!read_next_token()) return 10;
-    es = bool_expr();
-    if (es > 0) {
-        exit_scope();
-        return es;
+    // 尝试解析条件表达式
+    int bool_es = bool_expr();
+    if (bool_es > 0) {
+        // 条件表达式解析出错，但仍然尝试继续
+        es = bool_es;
     }
 
     if (!has_fatal_error) {
@@ -1376,19 +1421,29 @@ int while_stat() {
         cx1 = codesIndex++;
     }
 
+    // 检查是否有右括号
     if (strcmp(token, ")") != 0 && strcmp(token1, ")") != 0) {
+        // 缺少右括号，报告错误但继续
         report_error(6, "期望)，得到: %s %s", token, token1);
-        exit_scope();
-        return 6;
+        es = 6;
+        // 不立即返回，尝试继续解析循环体
+    } else {
+        // 有右括号，读取下一个token
+        if (!read_next_token()) return 10;
     }
 
-    if (!read_next_token()) return 10;
-    es = statement();
+    // 解析循环体
+    printf("准备解析while循环体，当前token: %s %s\n", token, token1);
 
-    // 退出循环作用域
+    ast_begin("WhileBody");
+    int stmt_es = statement();
+    ast_end();
+
     exit_scope();
 
-    if (es > 0) return es;
+    if (stmt_es > 0) {
+        es = stmt_es;
+    }
 
     if (!has_fatal_error) {
         strcpy(codes[codesIndex].opt, "BR");
@@ -1396,9 +1451,9 @@ int while_stat() {
         codesIndex++;
         codes[cx1].operand = codesIndex;
     }
+
     return es;
 }
-
 int for_stat() {
     int es = 0, cx1, cx2;
 
