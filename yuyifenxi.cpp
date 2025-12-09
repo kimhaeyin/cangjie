@@ -997,36 +997,68 @@ int declaration_stat() {
 // 修改main_declaration函数：
 
 int main_declaration() {
-    int es = 0;
+    int es = 0, cx1;
     ast_add_attr("ID", "main");
 
+    printf("解析main函数，当前token: %s %s\n", token, token1);
+
+    // 检查左括号
     if (strcmp(token, "(") != 0 && strcmp(token1, "(") != 0) {
-        report_error(5, "期望(，得到: %s", token1);
+        report_error(5, "期望(，得到: %s %s", token, token1);
         es = 5;
-        skip_to_sync_point();
-        return es;
+    } else {
+        // 正常情况：有括号
+        if (!read_next_token()) return 10;
     }
 
-    if (!read_next_token()) return 10;
+    // 检查右括号
     if (strcmp(token, ")") != 0 && strcmp(token1, ")") != 0) {
         report_error(6, "期望)，得到: %s %s", token, token1);
         es = 6;
-        skip_to_sync_point();
-        return es;
+    } else {
+        if (!read_next_token()) return 10;
     }
-
-    if (!read_next_token()) return 10;
 
     // 进入函数作用域
     enter_scope("function");
 
-    // 生成函数入口代码
     if (!has_fatal_error) {
-        gen_code("ENTER", 0);  // 为函数调用开辟数据区
+        gen_code("ENTER", 0);
     }
 
-    es = function_body();
+    // 检查左大括号
+    int has_compound = 0;
+    if (strcmp(token, "{") == 0 || strcmp(token1, "{") == 0) {
+        has_compound = 1;
+    } else {
+        report_error(11, "期望{，得到: %s %s", token, token1);
+        es = 11;
+    }
+
+    printf("准备解析main函数体，当前token: %s %s\n", token, token1);
+
+    ast_begin("MainBody");
+
+    if (has_compound) {
+        int func_es = function_body();
+        if (func_es > 0) {
+            es = func_es;
+        }
+    } else {
+        // 如果没有大括号，尝试解析单个语句作为函数体
+        int stmt_es = statement();
+        if (stmt_es > 0) {
+            es = stmt_es;
+        }
+    }
+
+    ast_end();
+
     exit_scope();
+
+    if (!has_fatal_error) {
+        gen_code("STOP", 0);
+    }
 
     return es;
 }
@@ -1037,6 +1069,7 @@ int program() {
     int es = 0;
     ast_begin("Program");
 
+    // 检查main关键字
     if (strcmp(token, "main") != 0 && strcmp(token1, "main") != 0) {
         report_error(13, "缺少main函数，得到: %s %s", token, token1);
         es = 13;
@@ -1045,35 +1078,34 @@ int program() {
         return es;
     }
 
-    ast_begin("main_declaration");
+    ast_begin("MainFunction");
 
-    es = insert_Symbol(function, "main", TYPE_INT, 0, 0, NULL, 0);
-    if (es > 0) {
+    // 插入main函数符号
+    int insert_es = insert_Symbol(function, "main", TYPE_INT, 0, 0, NULL, 0);
+    if (insert_es > 0 && insert_es != 22) {  // 22是重复定义错误，可以继续
         ast_end();
         ast_end();
-        return es;
+        return insert_es;
     }
 
-    // 不需要生成ENTRY指令，因为你的指令集没有ENTRY
+    if (!read_next_token()) {
+        ast_end();
+        ast_end();
+        return 10;
+    }
 
-    if (!read_next_token()) return 10;
+    // 解析main函数声明
     es = main_declaration();
-    if (es > 0) {
+    if (es > 0 && has_fatal_error) {
         ast_end();
         ast_end();
         return es;
-    }
-
-    // 生成停止指令
-    if (!has_fatal_error) {
-        gen_code("STOP", 0);
     }
 
     ast_end();
     ast_end();
     return es;
 }
-
 int function_body() {
     int es = 0;
     ast_begin("Function_Body");
