@@ -280,7 +280,7 @@ void report_warning(const char *fmt, ...) {
 }
 
 void print_all_errors() {
-    printf("\n=== 语义分析报告 ===\n");
+    printf("\n=== 语法语义分析报告 ===\n");
 
     int error_num = 0;
     int warning_num = 0;
@@ -1001,7 +1001,7 @@ int main_declaration() {
     ast_add_attr("ID", "main");
 
     if (strcmp(token, "(") != 0 && strcmp(token1, "(") != 0) {
-        report_error(5, "期望(，得到: %s %s", token, token1);
+        report_error(5, "期望(，得到: %s", token1);
         es = 5;
         skip_to_sync_point();
         return es;
@@ -1292,7 +1292,8 @@ int statement() {
 
 int if_stat() {
     int es = 0, cx1, cx2;
-    int has_error = 0;  // 记录是否有错误
+    int has_error = 0;
+    int missing_lparen = 0;
 
     printf("解析if语句，当前token: %s %s\n", token, token1);
 
@@ -1303,8 +1304,7 @@ int if_stat() {
         report_error(5, "期望(，得到: %s %s", token, token1);
         es = 5;
         has_error = 1;
-        skip_to_sync_point();
-        // 不立即返回
+        missing_lparen = 1;
     } else {
         // 正常情况：有括号
         if (!read_next_token()) return 10;
@@ -1315,7 +1315,33 @@ int if_stat() {
     if (bool_es > 0) {
         es = bool_es;
         has_error = 1;
-        // 条件表达式解析出错，但仍然尝试继续
+    }
+
+    // 检查右括号
+    if (missing_lparen) {
+        if (strcmp(token, ")") == 0 || strcmp(token1, ")") == 0) {
+            printf("缺少左括号，但遇到右括号，消费它\n");
+            if (!read_next_token()) return 10;
+        }
+    } else {
+        if (strcmp(token, ")") != 0 && strcmp(token1, ")") != 0) {
+            report_error(6, "期望)，得到: %s %s", token, token1);
+            es = 6;
+            has_error = 1;
+        } else {
+            if (!read_next_token()) return 10;
+        }
+    }
+
+    // 检查左大括号
+    int has_compound = 0;
+    if (strcmp(token, "{") == 0 || strcmp(token1, "{") == 0) {
+        has_compound = 1;
+    } else {
+        report_error(11, "期望{，得到: %s %s", token, token1);
+        es = 11;
+        has_error = 1;
+        // 不调用skip_to_sync_point()，尝试解析单条语句
     }
 
     // 只有没有致命错误且条件表达式解析成功时才生成BRF指令
@@ -1323,26 +1349,28 @@ int if_stat() {
         strcpy(codes[codesIndex].opt, "BRF");
         cx1 = codesIndex++;
     } else {
-        cx1 = -1;  // 标记无效
-    }
-
-    // 检查右括号
-    if (strcmp(token, ")") != 0 && strcmp(token1, ")") != 0) {
-        report_error(6, "期望)，得到: %s %s", token, token1);
-        es = 6;
-        has_error = 1;
-        skip_to_sync_point();
-        // 不立即返回
-    } else {
-        if (!read_next_token()) return 10;
+        cx1 = -1;
     }
 
     // 解析if分支
     printf("解析if分支，当前token: %s %s\n", token, token1);
-    int if_stmt_es = statement();
-    if (if_stmt_es > 0) {
-        es = if_stmt_es;
-        has_error = 1;
+
+    if (has_compound) {
+        // 进入块作用域
+        enter_scope("block");
+        int stmt_es = compound_stat();
+        exit_scope();
+        if (stmt_es > 0) {
+            es = stmt_es;
+            has_error = 1;
+        }
+    } else {
+        // 解析单条语句
+        int stmt_es = statement();
+        if (stmt_es > 0) {
+            es = stmt_es;
+            has_error = 1;
+        }
     }
 
     // 只有没有错误时才生成BR指令
@@ -1350,10 +1378,10 @@ int if_stat() {
         strcpy(codes[codesIndex].opt, "BR");
         cx2 = codesIndex++;
         if (cx1 != -1) {
-            codes[cx1].operand = codesIndex;  // 指向else语句开始或if结束
+            codes[cx1].operand = codesIndex;
         }
     } else {
-        cx2 = -1;  // 标记无效
+        cx2 = -1;
     }
 
     // 检查是否有else
@@ -1361,30 +1389,51 @@ int if_stat() {
         ast_add_attr("has_else", "true");
         if (!read_next_token()) return 10;
 
+        // 检查else后的左大括号
+        int else_has_compound = 0;
+        if (strcmp(token, "{") == 0 || strcmp(token1, "{") == 0) {
+            else_has_compound = 1;
+        } else {
+            report_error(11, "期望{，得到: %s %s", token, token1);
+            es = 11;
+            has_error = 1;
+        }
+
         // 解析else分支
         printf("解析else分支，当前token: %s %s\n", token, token1);
-        int else_stmt_es = statement();
-        if (else_stmt_es > 0) {
-            es = else_stmt_es;
-            has_error = 1;
+
+        if (else_has_compound) {
+            enter_scope("block");
+            int else_stmt_es = compound_stat();
+            exit_scope();
+            if (else_stmt_es > 0) {
+                es = else_stmt_es;
+                has_error = 1;
+            }
+        } else {
+            int else_stmt_es = statement();
+            if (else_stmt_es > 0) {
+                es = else_stmt_es;
+                has_error = 1;
+            }
         }
 
         // 只有没有错误时才设置跳转地址
         if (!has_fatal_error && !has_error && cx2 != -1) {
-            codes[cx2].operand = codesIndex;  // 指向if语句结束
+            codes[cx2].operand = codesIndex;
         }
     } else {
         ast_add_attr("has_else", "false");
 
         // 只有没有错误时才设置条件为假时的跳转地址
         if (!has_fatal_error && !has_error && cx1 != -1) {
-            codes[cx1].operand = codesIndex;  // 条件为假时直接跳到这里
+            codes[cx1].operand = codesIndex;
         }
     }
 
     // 设置BR指令的跳转地址
     if (!has_fatal_error && !has_error && cx2 != -1) {
-        codes[cx2].operand = codesIndex;  // BR指令跳转到这里
+        codes[cx2].operand = codesIndex;
     }
 
     return es;
@@ -1400,7 +1449,6 @@ int while_stat() {
     if (strcmp(token, "(") != 0 && strcmp(token1, "(") != 0) {
         report_error(5, "期望(，得到: %s %s", token, token1);
         es = 5;
-        // 不立即返回，尝试错误恢复
     } else {
         // 正常情况：有括号
         if (!read_next_token()) return 10;
@@ -1412,7 +1460,6 @@ int while_stat() {
     // 尝试解析条件表达式
     int bool_es = bool_expr();
     if (bool_es > 0) {
-        // 条件表达式解析出错，但仍然尝试继续
         es = bool_es;
     }
 
@@ -1423,27 +1470,43 @@ int while_stat() {
 
     // 检查是否有右括号
     if (strcmp(token, ")") != 0 && strcmp(token1, ")") != 0) {
-        // 缺少右括号，报告错误但继续
         report_error(6, "期望)，得到: %s %s", token, token1);
         es = 6;
-        // 不立即返回，尝试继续解析循环体
     } else {
-        // 有右括号，读取下一个token
         if (!read_next_token()) return 10;
+    }
+
+    // 检查左大括号
+    int has_compound = 0;
+    if (strcmp(token, "{") == 0 || strcmp(token1, "{") == 0) {
+        has_compound = 1;
+    } else {
+        report_error(11, "期望{，得到: %s %s", token, token1);
+        es = 11;
     }
 
     // 解析循环体
     printf("准备解析while循环体，当前token: %s %s\n", token, token1);
 
     ast_begin("WhileBody");
-    int stmt_es = statement();
+
+    if (has_compound) {
+        enter_scope("block");
+        int stmt_es = compound_stat();
+        exit_scope();
+        if (stmt_es > 0) {
+            es = stmt_es;
+        }
+    } else {
+        int stmt_es = statement();
+        if (stmt_es > 0) {
+            es = stmt_es;
+        }
+    }
+
     ast_end();
 
     exit_scope();
-
-    if (stmt_es > 0) {
-        es = stmt_es;
-    }
 
     if (!has_fatal_error) {
         strcpy(codes[codesIndex].opt, "BR");
@@ -1533,8 +1596,32 @@ int for_stat() {
     }
 
     if (!read_next_token()) return 10;
+
+    // 检查左大括号
+    int has_compound = 0;
+    if (strcmp(token, "{") == 0 || strcmp(token1, "{") == 0) {
+        has_compound = 1;
+    } else {
+        report_error(11, "期望{，得到: %s %s", token, token1);
+        es = 11;
+    }
+
     ast_begin("LoopBody");
-    es = statement();
+
+    if (has_compound) {
+        enter_scope("block");
+        int stmt_es = compound_stat();
+        exit_scope();
+        if (stmt_es > 0) {
+            es = stmt_es;
+        }
+    } else {
+        int stmt_es = statement();
+        if (stmt_es > 0) {
+            es = stmt_es;
+        }
+    }
+
     ast_end();
 
     // 退出循环作用域
@@ -1553,8 +1640,16 @@ int compound_stat() {
     int es = 0;
     ast_add_attr("start", "{");
 
+    // 已经确认有左大括号，消费它
     if (!read_next_token()) return 10;
-    es = statement_list();
+
+    // 检查是否为空复合语句
+    if (strcmp(token, "}") == 0 || strcmp(token1, "}") == 0) {
+        // 空语句块
+        ast_add_attr("empty", "true");
+    } else {
+        es = statement_list();
+    }
 
     if (es > 0) return es;
 
