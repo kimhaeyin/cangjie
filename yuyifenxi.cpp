@@ -303,7 +303,7 @@ void print_all_errors() {
     } else if (error_num == 0) {
         printf("语义检查通过，但有警告需要注意。\n");
     } else if (has_fatal_error) {
-        printf("存在致命错误，无法生成中间代码。\n");
+        printf("存在致命错误，中断生成中间代码。\n");
     }
 }
 
@@ -546,7 +546,6 @@ int new_label() {
 
 void print_intermediate_code() {
     if (has_fatal_error) {
-        printf("\n由于存在致命错误，跳过中间代码生成。\n");
         return;
     }
 
@@ -838,6 +837,7 @@ int TESTparse() {
         return 10;
     }
 
+    // 初始化所有全局变量
     ast_init();
     codesIndex = 0;
     temp_var_count = 0;
@@ -865,11 +865,18 @@ int TESTparse() {
     // 退出全局作用域
     exit_scope();
 
+    printf("\n==================== 语法语义分析完成 ====================\n");
+
+    // 输出错误报告
     print_all_errors();
 
-    if (!has_fatal_error) {
+
+
+    // 输出中间代码
+    if (codesIndex > 0) {
         print_intermediate_code();
 
+        // 输出中间代码到文件
         char codefile[512];
         snprintf(codefile, sizeof(codefile), "%s.codes.txt", tokenfile);
         FILE *fcode = fopen(codefile, "w");
@@ -880,24 +887,115 @@ int TESTparse() {
             for (int i = 0; i < codesIndex; i++) {
                 fprintf(fcode, "%-6d %-10s %-10d\n", i, codes[i].opt, codes[i].operand);
             }
+            fprintf(fcode, "\n总计: %d 条中间代码\n", codesIndex);
             fclose(fcode);
             printf("中间代码已输出到 %s\n", codefile);
         }
+    } else {
+        printf("\n未生成中间代码\n");
     }
 
+    // 输出AST到文件
     char astfile[512];
     snprintf(astfile, sizeof(astfile), "%s.ast.txt", tokenfile);
     FILE *fasta = fopen(astfile, "w");
     if (fasta) {
+        fprintf(fasta, "抽象语法树 (AST):\n");
+        fprintf(fasta, "================\n\n");
         fputs(astText, fasta);
         fclose(fasta);
         printf("语法树已输出到 %s\n", astfile);
     }
 
-    free(astText);
-    return (es == 0 && error_count == 0) ? 0 : 1;
-}
+    // 输出符号表到控制台
+    if (symbolIndex > 0) {
+        printf("\n==================== 符号表 ====================\n");
+        printf("索引 名称             类别      类型      地址  已初始化 作用域 行号\n");
+        printf("---------------------------------------------------------------------\n");
 
+        for (int i = 0; i < symbolIndex; i++) {
+            // 类别字符串
+            char category_str[16];
+            switch (symbol[i].kind) {
+                case variable: strcpy(category_str, "变量"); break;
+                case function: strcpy(category_str, "函数"); break;
+                case parameter: strcpy(category_str, "参数"); break;
+                default: strcpy(category_str, "未知"); break;
+            }
+
+            // 类型字符串（处理数组）
+            char type_info[32];
+            if (symbol[i].type == TYPE_ARRAY) {
+                snprintf(type_info, sizeof(type_info), "数组[%d维]",
+                        symbol[i].array_info.dimensions);
+            } else {
+                strcpy(type_info, type_to_string(symbol[i].type));
+            }
+
+            // 是否已初始化
+            char init_str[8];
+            strcpy(init_str, symbol[i].initialized ? "是" : "否");
+
+            printf("%-4d %-16s %-9s %-9s %-6d %-8s %-6d %-6d\n",
+                   i,
+                   symbol[i].name,
+                   category_str,
+                   type_info,
+                   symbol[i].address,
+                   init_str,
+                   symbol[i].scope_level,
+                   symbol[i].line_declared);
+        }
+        printf("\n总计: %d 个符号\n", symbolIndex);
+
+
+        // 输出符号表到文件
+        char symfile[512];
+        snprintf(symfile, sizeof(symfile), "%s.symbols.txt", tokenfile);
+        FILE *fsym = fopen(symfile, "w");
+        if (fsym) {
+            fprintf(fsym, "符号表内容:\n");
+            fprintf(fsym, "索引 名称             类别      类型      地址  已初始化 作用域 行号\n");
+            fprintf(fsym, "---------------------------------------------------------------------\n");
+
+            for (int i = 0; i < symbolIndex; i++) {
+                char category_str[16];
+                switch (symbol[i].kind) {
+                    case variable: strcpy(category_str, "变量"); break;
+                    case function: strcpy(category_str, "函数"); break;
+                    case parameter: strcpy(category_str, "参数"); break;
+                    default: strcpy(category_str, "未知"); break;
+                }
+
+                char type_info[32];
+                if (symbol[i].type == TYPE_ARRAY) {
+                    snprintf(type_info, sizeof(type_info), "数组[%d维]",
+                            symbol[i].array_info.dimensions);
+                } else {
+                    strcpy(type_info, type_to_string(symbol[i].type));
+                }
+
+                fprintf(fsym, "%-4d %-16s %-9s %-9s %-6d %-8s %-6d %-6d\n",
+                       i,
+                       symbol[i].name,
+                       category_str,
+                       type_info,
+                       symbol[i].address,
+                       symbol[i].initialized ? "是" : "否",
+                       symbol[i].scope_level,
+                       symbol[i].line_declared);
+            }
+
+            fprintf(fsym, "\n总计: %d 个符号\n", symbolIndex);
+            fclose(fsym);
+            printf("符号表已输出到 %s\n", symfile);
+        }
+    } else {
+        printf("\n符号表为空\n");
+    }
+    // 清理内存
+    free(astText);
+}
 // ===================== 语法分析函数实现 =====================
 
 // 修改declaration_stat函数中的代码生成：
@@ -1118,7 +1216,7 @@ int function_body() {
         return es;
     }
 
-    offset = 2;
+    offset = 1;
 
     if (!read_next_token()) return 10;
     es = declaration_list();
@@ -2433,11 +2531,12 @@ int factor() {
                 codes[codesIndex].operand = pos;
                 codesIndex++;
             }
-        } else {
+        }
+        /*else {
             // 变量未声明
             report_error(23, "变量 %s 未声明", token1);
             return 23;
-        }
+        }*/
 
         if (!read_next_token()) return 10;
     } else if (strcmp(token, "NUM") == 0 || strcmp(token1, "NUM") == 0) {
